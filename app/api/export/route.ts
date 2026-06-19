@@ -34,10 +34,21 @@ export async function POST(request: NextRequest) {
   });
 
   if (!upstream.ok) {
-    const err = await upstream.json().catch(() => ({ detail: "Export failed" }));
+    const errText = await upstream.text().catch(() => "Export failed");
+    let detail = "Export failed";
+    try { detail = (JSON.parse(errText) as { detail?: string }).detail ?? errText; } catch { detail = errText; }
+    console.error("[/api/export] upstream error", upstream.status, detail.slice(0, 300));
+    return NextResponse.json({ error: detail.slice(0, 300) }, { status: upstream.status });
+  }
+
+  // Guard: reject anything that isn't xlsx so we never send HTML/JSON to the browser as a file
+  const upstreamCT = upstream.headers.get("Content-Type") ?? "";
+  if (!upstreamCT.includes("spreadsheetml") && !upstreamCT.includes("octet-stream")) {
+    const body = await upstream.text().catch(() => "(unreadable)");
+    console.error("[/api/export] non-xlsx response from export service:", upstreamCT, body.slice(0, 400));
     return NextResponse.json(
-      { error: (err as { detail?: string }).detail ?? "Export failed" },
-      { status: upstream.status }
+      { error: `Export service returned unexpected content-type: ${upstreamCT}. Is EXPORT_SERVICE_URL correct and the service deployed?` },
+      { status: 502 }
     );
   }
 
