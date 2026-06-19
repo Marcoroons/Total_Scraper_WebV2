@@ -24,6 +24,27 @@ const STATUSES = [
   { value: "FAILED", label: "Failed" },
 ];
 
+// Only job types that have a working export endpoint on the export-service
+const EXPORT_ENDPOINTS: Record<string, string> = {
+  "Specific URLs (Video Stats)": "export/video-stats",
+  "Profile Feed (Audit)":        "export/profile-audit",
+  "Comments (Sentiment)":        "export/nlp",
+};
+
+function buildExportPayload(job: Job, endpoint: string) {
+  const base = { project_id: job.project_id, platform: job.platform, endpoint };
+  if (endpoint === "export/profile-audit") {
+    return {
+      ...base,
+      usernames:  [job.kol_username].filter(Boolean),
+      sort_by:    "Most Views",
+      incl_top5:  true,
+      incl_bot5:  false,
+    };
+  }
+  return { ...base, video_urls: [job.target_url] };
+}
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString("en-SG", {
     day: "2-digit",
@@ -39,6 +60,7 @@ export default function QueuePage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [jobTypeFilter, setJobTypeFilter] = useState("");
   const [sort, setSort] = useState<"desc" | "asc">("desc");
+  const [exportingJobId, setExportingJobId] = useState<string | null>(null);
 
   const { jobs, isLoading, error, refetch, cancelJob, retryJob } = useJobs(
     activeProjectId,
@@ -65,9 +87,40 @@ export default function QueuePage() {
     }
   }
 
-  function handleExport(job: Job) {
-    // TODO: wire real export in a later block
-    console.log("[Export]", job.job_id, job.job_type);
+  async function handleExport(job: Job) {
+    const endpoint = EXPORT_ENDPOINTS[job.job_type];
+    if (!endpoint) return;
+
+    setExportingJobId(job.job_id);
+    try {
+      const payload = buildExportPayload(job, endpoint);
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Export failed" }));
+        alert((err as { error?: string }).error ?? "Export failed. Check Railway logs.");
+        return;
+      }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      const safeType = job.job_type.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      a.download = `${safeType}_${job.platform.toLowerCase()}_${job.job_id.slice(0, 8)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Export failed — export service may be down.");
+    } finally {
+      setExportingJobId(null);
+    }
   }
 
   return (
@@ -156,69 +209,68 @@ export default function QueuePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {jobs.map((job) => (
-                <tr key={job.job_id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3 max-w-[200px]">
-                    <p
-                      className="truncate font-medium text-gray-800"
-                      title={job.target_url}
-                    >
-                      {job.kol_username || job.target_url}
-                    </p>
-                    {job.kol_username && (
-                      <p className="text-xs text-gray-400 truncate">
-                        {job.target_url}
+              {jobs.map((job) => {
+                const canExport = job.status === "COMPLETED" && job.job_type in EXPORT_ENDPOINTS;
+                const isExporting = exportingJobId === job.job_id;
+                return (
+                  <tr key={job.job_id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 max-w-[200px]">
+                      <p className="truncate font-medium text-gray-800" title={job.target_url}>
+                        {job.kol_username || job.target_url}
                       </p>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{job.platform}</td>
-                  <td className="px-4 py-3 text-gray-600 max-w-[160px]">
-                    <span className="truncate block" title={job.job_type}>
-                      {job.job_type}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <JobStatusBadge
-                      status={job.status}
-                      errorMessage={job.error_message}
-                    />
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
-                    {formatDate(job.created_at)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      {job.status === "PENDING" && (
-                        <button
-                          onClick={() => handleCancel(job)}
-                          title="Cancel job"
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </button>
+                      {job.kol_username && (
+                        <p className="text-xs text-gray-400 truncate">{job.target_url}</p>
                       )}
-                      {job.status === "FAILED" && (
-                        <button
-                          onClick={() => handleRetry(job)}
-                          title="Retry job"
-                          className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                        </button>
-                      )}
-                      {job.status === "COMPLETED" && (
-                        <button
-                          onClick={() => handleExport(job)}
-                          title="Export results"
-                          className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{job.platform}</td>
+                    <td className="px-4 py-3 text-gray-600 max-w-[160px]">
+                      <span className="truncate block" title={job.job_type}>{job.job_type}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <JobStatusBadge status={job.status} errorMessage={job.error_message} />
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                      {formatDate(job.created_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        {job.status === "PENDING" && (
+                          <button
+                            onClick={() => handleCancel(job)}
+                            title="Cancel job"
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
+                        {job.status === "FAILED" && (
+                          <button
+                            onClick={() => handleRetry(job)}
+                            title="Retry job"
+                            className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
+                        {canExport && (
+                          <button
+                            onClick={() => handleExport(job)}
+                            disabled={isExporting}
+                            title={isExporting ? "Generating…" : "Download Excel"}
+                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-wait"
+                          >
+                            {isExporting ? (
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Download className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <div className="px-4 py-2.5 border-t bg-gray-50 text-xs text-gray-400 flex items-center gap-1.5">
