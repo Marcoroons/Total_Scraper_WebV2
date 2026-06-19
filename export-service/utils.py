@@ -1,0 +1,563 @@
+import re
+"""
+utils.py — shared helpers used across all tab modules and worker.
+Covers: CSS injection, SMTP email, Excel generators, job-type config.
+"""
+import io
+import os
+import smtplib
+from email.message import EmailMessage
+
+import pandas as pd
+import streamlit as st
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB TYPE METADATA
+# Drives column labels, metric selectors, duration estimates, and UI hints.
+# ─────────────────────────────────────────────────────────────────────────────
+JOB_META = {
+    "Specific URLs (Video Stats)": {
+        "input_cols":    ["KOL Username", "Video URL"],
+        "rate_eligible": True,
+        "metric_eligible": True,
+        "duration":      "1–3 min per URL",
+        "help": (
+            "**What it does:** Pulls engagement metrics for specific posts you already know.\n\n"
+            "**Input:** Paste the full post URL in *Video URL*. "
+            "*KOL Username* is optional but helps with ER context."
+        ),
+    },
+    "Profile Feed (Audit)": {
+        "input_cols":    ["Profile Username or URL"],
+        "rate_eligible": True,
+        "metric_eligible": True,
+        "duration":      "3–7 min per profile",
+        "help": (
+            "**What it does:** Scrapes recent posts from a creator's profile.\n\n"
+            "**Input:** Enter a bare username (`johndoe`), `@johndoe`, "
+            "or a full profile URL — any format works."
+        ),
+    },
+    "Comments (Sentiment)": {
+        "input_cols":    ["KOL Username", "Video URL"],
+        "rate_eligible": False,
+        "metric_eligible": False,
+        "duration":      "4–10 min per video",
+        "help": (
+            "**What it does:** Scrapes comments and runs NLP sentiment scoring.\n\n"
+            "**Input:** *Video URL* is required. *KOL Username* filters "
+            "out creator replies so they don't skew sentiment."
+        ),
+    },
+    "Trend Discovery (Hashtag)": {
+        "input_cols":    ["Hashtag(s)"],
+        "rate_eligible": False,
+        "metric_eligible": False,
+        "duration":      "5–15 min per hashtag",
+        "help": (
+            "**What it does:** Scrapes top public posts under a hashtag to reveal "
+            "what content structure, length, and sounds are winning.\n\n"
+            "**Input:** Enter one or more hashtags in *Hashtag(s)*, e.g. `OOTD` or "
+            "`#OOTD, #Fashion`. No `#` needed — it's stripped automatically. "
+            "Separate multiple hashtags with commas."
+        ),
+    },
+    "Trend Discovery (User Profile)": {
+        "input_cols":    ["Competitor Profile"],
+        "rate_eligible": False,
+        "metric_eligible": False,
+        "duration":      "3–7 min per profile",
+        "help": (
+            "**What it does:** Analyses a competitor's or reference creator's top-performing "
+            "videos to extract structural patterns.\n\n"
+            "**Input:** Enter the username or full profile URL in *Competitor Profile*."
+        ),
+    },
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STREAMLIT CSS  (inject once from appv2.py)
+# ─────────────────────────────────────────────────────────────────────────────
+APP_CSS = """
+<style>
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: rgba(31,78,120,0.12);
+    border: 1px solid rgba(31,78,120,0.35);
+    border-radius: 10px;
+    padding: 14px 18px;
+}
+/* Primary button */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg,#1F4E78 0%,#2E86AB 100%);
+    border: none; border-radius: 6px; font-weight:600; color:#fff;
+}
+/* Tabs */
+.stTabs [data-baseweb="tab"] { font-weight:600; font-size:13px; }
+/* Info/warning boxes */
+.stAlert { border-radius: 8px; }
+/* Expander */
+.streamlit-expanderHeader { font-weight:600; }
+/* Dataframe */
+[data-testid="stDataFrame"] { border-radius:8px; }
+/* Status pill helpers (use via st.markdown) */
+.pill-green { background:#d4edda; color:#155724; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+.pill-yellow{ background:#fff3cd; color:#856404; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+.pill-red   { background:#f8d7da; color:#721c24; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+</style>
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EMAIL
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_bot_creds():
+    email    = os.environ.get("BOT_EMAIL")
+    password = os.environ.get("BOT_APP_PASSWORD")
+    if not email or not password:
+        try:
+            email    = st.secrets.get("BOT_EMAIL")
+            password = st.secrets.get("BOT_APP_PASSWORD")
+        except Exception:
+            pass
+    return email, password
+
+
+def dispatch_email(msg: EmailMessage) -> tuple[bool, str]:
+    """
+    Send a pre-built EmailMessage via Gmail SMTP_SSL.
+    Returns (success: bool, message: str).
+    Uses SMTP_SSL port 465 — more reliable than STARTTLS in containerised envs.
+    """
+    bot_email, bot_password = _get_bot_creds()
+    if not bot_email or not bot_password:
+        return False, "BOT_EMAIL or BOT_APP_PASSWORD not set in environment."
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(bot_email, bot_password)
+            smtp.send_message(msg)
+        return True, "Email sent successfully."
+    except Exception as e:
+        return False, f"SMTP error: {e}"
+
+
+def send_report_email(
+    from_email: str,
+    to_csv: str,
+    subject: str,
+    body: str,
+    excel_buffer,
+    filename: str,
+) -> tuple[bool, str]:
+    """Convenience wrapper — builds + dispatches a report email."""
+    bot_email, _ = _get_bot_creds()
+    if not bot_email:
+        return False, "BOT_EMAIL not configured."
+
+    msg             = EmailMessage()
+    msg["Subject"]  = subject
+    msg["From"]     = f"Total Scraper System <{bot_email}>"
+    msg["To"]       = ", ".join(e.strip() for e in to_csv.split(",") if e.strip())
+    msg["Reply-To"] = from_email
+    msg.set_content(body)
+
+    excel_buffer.seek(0)
+    msg.add_attachment(
+        excel_buffer.read(),
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+    return dispatch_email(msg)
+
+
+def send_invite_email(inviter_email: str, recipient_email: str, team_name: str) -> tuple[bool, str]:
+    bot_email, _ = _get_bot_creds()
+    if not bot_email:
+        return False, "BOT_EMAIL not configured."
+
+    msg             = EmailMessage()
+    msg["Subject"]  = f"🤝 You've been invited to join '{team_name}' on Total Scraper"
+    msg["From"]     = f"Total Scraper System <{bot_email}>"
+    msg["To"]       = recipient_email
+    msg["Reply-To"] = inviter_email
+    msg.set_content(
+        f"Hello!\n\n{inviter_email} has invited you to collaborate in the "
+        f"'{team_name}' workspace on Total Scraper Web.\n\n"
+        f"To join:\n1. Go to the app.\n2. Create an account using {recipient_email}.\n"
+        f"3. Use the Secret Invite Code provided by your admin.\n\nWelcome!\nTotal Scraper Bot"
+    )
+    return dispatch_email(msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCEL HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def _fmt(val):
+    """Return 'Hidden' for -1 metrics, empty for NaN."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return "Hidden" if val == -1 else val
+
+
+def _apply_header(ws):
+    for cell in ws[1]:
+        cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+
+def _widen(ws, spec: list[tuple[str, int]]):
+    for col, w in spec:
+        ws.column_dimensions[col].width = w
+
+
+def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False) -> io.BytesIO:
+    df = df_raw.copy()
+    df["Likes"]    = df["likes"].apply(_fmt)
+    df["Comments"] = df["comments"].apply(_fmt)
+    df["Shares"]   = df["shares"].apply(_fmt)
+    df["Plays"]    = df["play_count"].apply(_fmt)
+
+    def _er(row):
+        if "Hidden" in (row["Likes"], row["Comments"], row["Shares"], row["Plays"]):
+            return "Hidden"
+        plays = max(row["play_count"], 1)
+        return f"{(row['likes'] + row['comments'] + row['shares']) / plays * 100:.2f}%"
+
+    df["Engagement Rate"] = df.apply(_er, axis=1)
+
+    if is_tiktok:
+        out = df[["username", "video_url", "Plays", "Likes", "Comments", "Shares", "Engagement Rate"]]
+        out.columns = ["Username", "Video URL", "Play Count", "Likes", "Comments", "Shares", "Engagement Rate"]
+    else:
+        df["VTR"] = df["Plays"].apply(lambda v: "N/A" if v == "Hidden" else "100%")
+        out = df[["username", "video_url", "Plays", "Plays", "VTR", "Likes", "Comments", "Shares", "Engagement Rate"]].copy()
+        out.columns = ["Username", "Video URL", "Play Count", "View Count", "VTR", "Likes", "Comments", "Shares", "Engagement Rate"]
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        out.to_excel(writer, index=False, sheet_name="Video Stats")
+        ws = writer.sheets["Video Stats"]
+        _apply_header(ws)
+        _widen(ws, [("A", 25), ("B", 55), ("C", 16), ("D", 16), ("E", 14),
+                    ("F", 14), ("G", 14), ("H", 14), ("I", 18)])
+        ws.freeze_panes = "C2"
+    buf.seek(0)
+    return buf
+
+
+def generate_profile_audit_excel(
+    df_raw: pd.DataFrame,
+    is_tiktok: bool = False,
+    sort_by: str = "Most Views",
+    incl_top5: bool = True,
+    incl_bot5: bool = False,
+) -> io.BytesIO:
+    """
+    Compact Profile Feed (Audit) export.
+
+    Layout (one row per creator):
+      Fixed: KOL/Creator | Platform | # Videos | Avg Views | Most Views | Least Views
+             Date of Most Viewed | Date of Least Viewed
+      Optional: Top 5 Avg Views | Bottom 5 Avg Views
+      Video columns: V1 | V2 | V3 | V4 | ...
+        — Each cell value = plain view count (integer, easy to select/copy as a range)
+        — Each cell carries an openpyxl Comment: "🔗 URL\n📅 Posted: YYYY-MM-DD"
+
+    Sheet 2 "Full Details" — one row per video, readable table with URL + date columns.
+    Sheet 3 "Export Notes" — platform disclaimers.
+    """
+    import re
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.comments import Comment
+
+    df = df_raw.copy()
+    platform_label = "TikTok" if is_tiktok else "Instagram"
+
+    # Ensure required columns exist
+    if "play_count" not in df.columns:
+        df["play_count"] = 0
+    if "post_url"   not in df.columns:
+        df["post_url"]   = ""
+    if "post_date"  not in df.columns:
+        df["post_date"]  = ""
+    if "username"   not in df.columns:
+        df["username"]   = "unknown"
+
+    df["play_count"] = pd.to_numeric(df["play_count"], errors="coerce").fillna(0).astype(int)
+    df["post_url"]   = df["post_url"].fillna("").astype(str)
+    df["post_date"]  = df["post_date"].fillna("").astype(str).str[:10]
+
+    def _sort_group(g: pd.DataFrame) -> pd.DataFrame:
+        if sort_by == "Most Views":   return g.sort_values("play_count", ascending=False)
+        if sort_by == "Least Views":  return g.sort_values("play_count", ascending=True)
+        # Date-based sorting: parse dates properly, push empty dates to the end
+        if "post_date" in g.columns:
+            g = g.copy()
+            g["_date_sort"] = pd.to_datetime(g["post_date"], errors="coerce")
+            # NaT (missing dates) go to the END regardless of sort direction
+            if sort_by == "Most Recent":
+                g = g.sort_values("_date_sort", ascending=False, na_position="last")
+            else:  # "Oldest"
+                g = g.sort_values("_date_sort", ascending=True, na_position="last")
+            return g.drop("_date_sort", axis=1)
+        # No date column → fall back to play_count
+        return g.sort_values("play_count", ascending=(sort_by == "Oldest"))
+
+    # Preserve paste order — use first-appearance of each username, not alphabetical
+    ordered_kols = list(dict.fromkeys(df["username"].tolist()))
+    max_videos = max((len(df[df["username"] == k]) for k in ordered_kols), default=0)
+
+    # ── Colour palette ────────────────────────────────────────────────────────
+    NAVY   = "1B3A6B"; WHITE = "FFFFFF"; LBLUE = "EBF3FB"
+    GREEN  = "E8F8EE"; AMBER = "FEF3E2"
+    VID_A  = "FFFFFF"; VID_B = "F0F4FF"   # alternating video columns
+    thin   = Side(style="thin", color="BDC3C7")
+    BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def hfont(bold=True, color=WHITE, size=9):
+        return Font(bold=bold, color=color, size=size, name="Calibri")
+    def cell_font(bold=False, color="000000", size=9):
+        return Font(bold=bold, color=color, size=size, name="Calibri")
+    def fill(hex_color):
+        return PatternFill("solid", fgColor=hex_color)
+    def align(h="center", wrap=False):
+        return Alignment(horizontal=h, vertical="center", wrap_text=wrap)
+
+    wb = openpyxl.Workbook()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SHEET 1: Summary — compact one-row-per-creator with cell comments
+    # ═══════════════════════════════════════════════════════════════════════════
+    ws = wb.active
+    ws.title = f"KOL Views ({platform_label})"
+
+    fixed_headers = [
+        "KOL / Creator", "Platform", "# Videos",
+        "Avg Views", "Most Views", "Least Views",
+        "Date (Most Viewed)", "Date (Least Viewed)",
+        "KPI Est. Views (next video)",
+    ]
+    opt_headers = []
+    if incl_top5: opt_headers += ["Top 5 Avg Views"]
+    if incl_bot5: opt_headers += ["Bottom 5 Avg Views"]
+    video_headers = [f"V{i}" for i in range(1, max_videos+1)]
+    all_headers = fixed_headers + opt_headers + video_headers
+
+    # Write header row
+    ws.append(all_headers)
+    for cell in ws[1]:
+        cell.fill      = fill(NAVY)
+        cell.font      = hfont()
+        cell.alignment = align()
+        cell.border    = BORDER
+        if cell.value == "KPI Est. Views (next video)":
+            cell.comment = Comment(
+                "Estimated views if you invest in this KOL again.\n\n"
+                "Methodology: median of their historical video view counts, "
+                "rounded to the nearest 10,000.\n\n"
+                "Median is used instead of average so a single viral outlier "
+                "doesn't inflate the expectation — this is meant to be a "
+                "conservative, defensible number for budget planning.",
+                "Total Scraper", width=280, height=140
+            )
+    ws.row_dimensions[1].height = 28
+
+    # Write data rows
+    for row_idx, kol in enumerate(ordered_kols, 2):
+        group = df[df["username"] == kol]
+        group   = _sort_group(group).reset_index(drop=True)
+        plays   = group["play_count"]
+        n       = len(group)
+        avg_v   = int(plays.mean()) if n else 0
+        max_v   = int(plays.max())  if n else 0
+        min_v   = int(plays.min())  if n else 0
+
+        # Find dates for most and least viewed
+        if n:
+            max_row = group.loc[plays.idxmax()]
+            min_row = group.loc[plays.idxmin()]
+            date_most  = str(max_row.get("post_date","") or "")[:10]
+            date_least = str(min_row.get("post_date","") or "")[:10]
+        else:
+            date_most = date_least = ""
+
+        profile_url = (f"https://www.tiktok.com/@{kol}" if is_tiktok
+                       else f"https://www.instagram.com/{kol}/")
+
+        # KPI estimate: expected views from investing in this KOL, based on their
+        # historical performance. Median (not mean) is used so a single viral outlier
+        # doesn't inflate the expectation — this is meant to be a conservative,
+        # defensible number for budget conversations. Rounded to the nearest 10,000.
+        kpi_est = int(round(plays.median() / 10000.0)) * 10000 if n else 0
+
+        row_data = [kol, platform_label, n, avg_v, max_v, min_v, date_most, date_least, kpi_est]
+        if incl_top5:
+            top5 = group.nlargest(5, "play_count")
+            row_data.append(int(top5["play_count"].mean()) if len(top5) else 0)
+        if incl_bot5:
+            bot5 = group.nsmallest(5, "play_count")
+            row_data.append(int(bot5["play_count"].mean()) if len(bot5) else 0)
+
+        # Video cells: only the view count — URL and date go in the cell comment
+        for i, (_, vrow) in enumerate(group.iterrows()):
+            row_data.append(int(vrow["play_count"]))
+        # Pad to max_videos
+        for _ in range(n, max_videos):
+            row_data.append(None)
+
+        ws.append(row_data)
+
+        # Style the data row
+        col_count = len(all_headers)
+        for col_idx in range(1, col_count + 1):
+            cell = ws.cell(row_idx, col_idx)
+            header = all_headers[col_idx - 1]
+
+            # Background
+            if header == "KPI Est. Views (next video)":
+                bg = "FFF4D6"  # gold highlight — this is the headline number for budget talks
+            elif col_idx <= len(fixed_headers):
+                bg = LBLUE
+            elif "Top 5"    in header: bg = GREEN
+            elif "Bottom 5" in header: bg = AMBER
+            else:
+                vid_num = col_idx - len(fixed_headers) - len(opt_headers)
+                bg = VID_A if vid_num % 2 == 1 else VID_B
+
+            cell.fill   = fill(bg)
+            cell.border = BORDER
+            cell.font   = cell_font(bold=(col_idx == 1))
+
+            # Alignment
+            if isinstance(cell.value, int):
+                cell.alignment = align("center")
+                cell.number_format = "#,##0"
+            else:
+                cell.alignment = align("left")
+
+            # Cell comment for video columns: URL + date
+            if header.startswith("V") and header[1:].isdigit():
+                vid_idx = int(header[1:]) - 1
+                if vid_idx < n:
+                    vrow   = group.iloc[vid_idx]
+                    url    = str(vrow.get("post_url","") or "")
+                    pdate  = str(vrow.get("post_date","") or "")[:10]
+                    likes  = int(vrow.get("likes",0) or 0)
+                    cmts   = int(vrow.get("comments",0) or 0)
+                    caption_preview = str(vrow.get("caption","") or "")[:80]
+                    comment_text = (
+                        f"🔗 {url}\n"
+                        f"📅 Posted: {pdate or 'unknown'}\n"
+                        f"❤️ Likes: {likes:,}  💬 Comments: {cmts:,}"
+                        + (f"\n📝 {caption_preview}..." if caption_preview else "")
+                    )
+                    comment = Comment(comment_text, "Total Scraper")
+                    comment.width  = 280
+                    comment.height = 100
+                    cell.comment = comment
+
+        ws.row_dimensions[row_idx].height = 18
+
+    # Column widths for Sheet 1
+    width_map = {
+        "KOL / Creator": 26, "Platform": 12, "# Videos": 10,
+        "Avg Views": 14, "Most Views": 14, "Least Views": 14,
+        "KPI Est. Views (next video)": 18,
+        "Date (Most Viewed)": 16, "Date (Least Viewed)": 16,
+        "Top 5 Avg Views": 16, "Bottom 5 Avg Views": 16,
+    }
+    for col_idx, header in enumerate(all_headers, 1):
+        w = width_map.get(header, 11 if header.startswith("V") else 14)
+        ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+    ws.freeze_panes = "B2"
+
+    # Note row at top explaining comments
+    ws.insert_rows(1)
+    note_cell = ws.cell(1, 1,
+        "💡 Hover over any V1, V2, V3… cell to see the video link, date posted, likes and comments.")
+    note_cell.font      = Font(italic=True, color="5B6A8A", size=8, name="Calibri")
+    note_cell.alignment = Alignment(horizontal="left", vertical="center")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=min(len(all_headers), 12))
+    ws.row_dimensions[1].height = 16
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SHEET 2: Full Details — one row per video, all columns visible
+    # ═══════════════════════════════════════════════════════════════════════════
+    ws2 = wb.create_sheet("Video Details")
+    detail_headers = ["KOL / Creator", "Platform", "Video #", "Views",
+                      "Date Posted", "Likes", "Comments", "Shares",
+                      "Sort Order", "Video URL"]
+    ws2.append(detail_headers)
+    for cell in ws2[1]:
+        cell.fill = fill(NAVY); cell.font = hfont(); cell.border = BORDER
+        cell.alignment = align()
+    ws2.row_dimensions[1].height = 24
+
+    detail_row = 2
+    for kol in ordered_kols:
+        group = df[df["username"] == kol]
+        group = _sort_group(group).reset_index(drop=True)
+        for i, (_, vrow) in enumerate(group.iterrows(), 1):
+            row = [
+                kol, platform_label, i,
+                int(vrow["play_count"]),
+                str(vrow.get("post_date","") or "")[:10],
+                int(vrow.get("likes",0) or 0),
+                int(vrow.get("comments",0) or 0),
+                int(vrow.get("shares",0) or 0),
+                sort_by,
+                str(vrow.get("post_url","") or ""),
+            ]
+            ws2.append(row)
+            bg = LBLUE if i % 2 == 0 else WHITE
+            for col_idx, cell in enumerate(ws2[detail_row], 1):
+                cell.fill   = fill(bg); cell.border = BORDER
+                cell.font   = cell_font()
+                cell.alignment = align("left" if col_idx in (1,2,5,9,10) else "center")
+                if isinstance(cell.value, int): cell.number_format = "#,##0"
+            ws2.row_dimensions[detail_row].height = 16
+            detail_row += 1
+
+    for col_idx, header in enumerate(detail_headers, 1):
+        ws2.column_dimensions[get_column_letter(col_idx)].width = (
+            28 if header in ("KOL / Creator","Video URL") else
+            14 if header in ("Date Posted","Sort Order") else 12
+        )
+    ws2.freeze_panes = "A2"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SHEET 3: Export Notes
+    # ═══════════════════════════════════════════════════════════════════════════
+    ws3 = wb.create_sheet("Export Notes")
+    notes = [
+        ("Total Scraper — Profile Feed (Audit) Export", True),
+        (f"Platform: {platform_label}", False),
+        (f"Video Sort Order: {sort_by}", False),
+        (f"Top 5 included: {incl_top5}   |   Bottom 5 included: {incl_bot5}", False),
+        ("", False),
+        ("HOW TO READ THE KOL VIEWS SHEET", True),
+        ("• Each V1, V2, V3… column = one video, sorted by your chosen order", False),
+        ("• The cell value is the view count — select a range of V-cells to sum/average in the formula bar", False),
+        ("• Hover over any V-cell to see the video link, date posted, likes and comments in the cell comment", False),
+        ("", False),
+        ("DISCLAIMERS", True),
+        ("• View counts shown are from the Instagram platform only — not Facebook, Messenger, or Audience Network.", False),
+        ("• 0 views means the creator's privacy settings prevented the API from returning this metric.", False),
+        ("• Instagram counts a view when the video is watched for 3+ continuous seconds.", False),
+        ("• TikTok Play Count increments every time the video starts, including auto-play and loops.", False),
+        ("• Scraped metrics reflect values at time of collection and may differ from current on-app figures.", False),
+    ]
+    for text, bold in notes:
+        ws3.append([text])
+        ws3.cell(ws3.max_row, 1).font = Font(bold=bold, size=9, name="Calibri")
+    ws3.column_dimensions["A"].width = 110
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
