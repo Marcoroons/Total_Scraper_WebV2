@@ -1,11 +1,10 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_ROUTES = new Set(["/login", "/signup"]);
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
-
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -14,7 +13,7 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -26,32 +25,23 @@ export async function middleware(request: NextRequest) {
       },
     }
   );
-
-  // Do not add logic between createServerClient and getUser().
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
-
   if (!user && !PUBLIC_ROUTES.has(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
-
   if (user && PUBLIC_ROUTES.has(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
-
   return supabaseResponse;
 }
 
 export const config = {
-  matcher: [
-    // Match all paths except Next.js internals and static files
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
