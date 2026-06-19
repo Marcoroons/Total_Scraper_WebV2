@@ -1,0 +1,152 @@
+"""
+export-service/main.py — FastAPI wrapper around utils.py / nlp_engine.py
+Deployed as a separate Railway service alongside worker.py.
+"""
+import sys
+import os
+from types import ModuleType
+
+# ── Streamlit stub ────────────────────────────────────────────────────────────
+# utils.py does `import streamlit as st` and calls st.secrets.get() inside a
+# try/except.  We register a minimal stub so the import succeeds without
+# installing Streamlit's full dependency tree.  st.secrets.get() returns None,
+# so _get_bot_creds() falls through to the os.environ path — exactly what we want.
+_st_stub = ModuleType("streamlit")
+
+class _Secrets:
+    def get(self, key, default=None):
+        return default
+
+_st_stub.secrets = _Secrets()
+sys.modules.setdefault("streamlit", _st_stub)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import io
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from supabase import create_client
+
+# Import generators (unchanged source files)
+from utils import generate_video_stats_excel, generate_profile_audit_excel
+from nlp_engine import generate_nlp_excel
+from database import (
+    get_campaign_videos,
+    get_influencer_profiles,
+    get_comments,
+    get_nlp_config,
+)
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app = FastAPI(title="Total Scraper Export Service", version="1.0.0")
+
+_frontend_url = os.environ.get("FRONTEND_URL", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[_frontend_url] if _frontend_url != "*" else ["*"],
+    allow_credentials=True,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+
+def _supabase():
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set")
+    return create_client(url, key)
+
+
+def _xlsx_response(buf: io.BytesIO, filename: str) -> StreamingResponse:
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ── Request models ────────────────────────────────────────────────────────────
+class VideoStatsRequest(BaseModel):
+    project_id: str
+    video_urls: list[str]
+    platform: str
+
+
+class ProfileAuditRequest(BaseModel):
+    project_id: str
+    usernames: list[str]
+    platform: str
+    sort_by: str = "Most Views"
+    incl_top5: bool = True
+    incl_bot5: bool = False
+
+
+class NLPRequest(BaseModel):
+    project_id: str
+    video_urls: list[str]
+    platform: str
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+@app.post("/export/video-stats")
+def export_video_stats(req: VideoStatsRequest):
+    supabase = _supabase()
+    rows = get_campaign_videos(supabase, req.platform, req.video_urls)
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No video data found. The job may still be processing.",
+        )
+    df = pd.DataFrame(rows)
+    buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"))
+    platform_slug = req.platform.lower()
+    return _xlsx_response(buf, f"video_stats_{platform_slug}.xlsx")
+
+
+@app.post("/export/profile-audit")
+def export_profile_audit(req: ProfileAuditRequest):
+    supabase = _supabase()
+    rows = get_influencer_profiles(supabase, req.platform, req.usernames)
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No profile data found. The job may still be processing.",
+        )
+    df = pd.DataFrame(rows)
+    buf = generate_profile_audit_excel(
+        df,
+        is_tiktok=(req.platform == "TikTok"),
+        sort_by=req.sort_by,
+        incl_top5=req.incl_top5,
+        incl_bot5=req.incl_bot5,
+    )
+    platform_slug = req.platform.lower()
+    return _xlsx_response(buf, f"profile_audit_{platform_slug}.xlsx")
+
+
+@app.post("/export/nlp")
+def export_nlp(req: NLPRequest):
+    supabase = _supabase()
+    rows = get_comments(supabase, req.platform, req.video_urls)
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No comment data found. The scrape may still be running.",
+        )
+    config = get_nlp_config(supabase, req.project_id)
+    df = pd.DataFrame(rows)
+    buf = generate_nlp_excel(df, config)
+    platform_slug = req.platform.lower()
+    return _xlsx_response(buf, f"nlp_analysis_{platform_slug}.xlsx")
