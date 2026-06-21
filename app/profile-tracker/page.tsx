@@ -3,7 +3,7 @@
 import { useState, useId } from "react";
 import { Plus, X } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
-import { useJobs } from "@/lib/hooks/useJobs";
+import { useJobs, type JobPayload } from "@/lib/hooks/useJobs";
 import { PlatformToggle } from "@/components/PlatformToggle";
 import { MetricsSelector } from "@/components/MetricsSelector";
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
@@ -133,7 +133,7 @@ export default function ProfileTrackerPage() {
     setErrors(errs);
     if (errs.length > 0) return;
 
-    const jobs = [];
+    const jobs: JobPayload[] = [];
     const warnings: string[] = [];
 
     for (const raw of filled) {
@@ -147,10 +147,8 @@ export default function ProfileTrackerPage() {
         : `https://www.tiktok.com/@${handle}`;
 
       // sort_by / incl_top5 / incl_bot5 are NOT columns in scrape_jobs —
-      // they are export-time parameters (passed to /export/profile-audit).
-      // date_from / date_to ARE columns if worker.py uses them; include them
-      // only when the user actually set a date so we don't blow up on old schemas.
-      const job: Record<string, unknown> = {
+      // they are export-time parameters passed to /export/profile-audit.
+      jobs.push({
         project_id:    activeProjectId,
         target_url:    url,
         platform,
@@ -161,11 +159,10 @@ export default function ProfileTrackerPage() {
         calc_metrics:  calcMetrics,
         format_filter: isTikTok ? "All Formats" : format,
         target_limit:  postLimit,
+        ...(startMode === "specific" && dateFrom ? { date_from: dateFrom } : {}),
+        ...(endMode   === "specific" && dateTo   ? { date_to:   dateTo   } : {}),
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
-      };
-      if (startMode === "specific" && dateFrom) job.date_from = dateFrom;
-      if (endMode   === "specific" && dateTo)   job.date_to   = dateTo;
-      jobs.push(job);
+      });
     }
 
     if (warnings.length > 0) {
