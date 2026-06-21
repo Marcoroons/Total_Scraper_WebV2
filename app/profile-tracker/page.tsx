@@ -146,7 +146,11 @@ export default function ProfileTrackerPage() {
         ? `https://www.instagram.com/${handle}/`
         : `https://www.tiktok.com/@${handle}`;
 
-      jobs.push({
+      // sort_by / incl_top5 / incl_bot5 are NOT columns in scrape_jobs —
+      // they are export-time parameters (passed to /export/profile-audit).
+      // date_from / date_to ARE columns if worker.py uses them; include them
+      // only when the user actually set a date so we don't blow up on old schemas.
+      const job: Record<string, unknown> = {
         project_id:    activeProjectId,
         target_url:    url,
         platform,
@@ -157,13 +161,11 @@ export default function ProfileTrackerPage() {
         calc_metrics:  calcMetrics,
         format_filter: isTikTok ? "All Formats" : format,
         target_limit:  postLimit,
-        sort_by:       sortBy,
-        incl_top5:     top5,
-        incl_bot5:     bot5,
-        date_from:     startMode === "specific" ? dateFrom : "",
-        date_to:       endMode   === "specific" ? dateTo   : "",
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
-      });
+      };
+      if (startMode === "specific" && dateFrom) job.date_from = dateFrom;
+      if (endMode   === "specific" && dateTo)   job.date_to   = dateTo;
+      jobs.push(job);
     }
 
     if (warnings.length > 0) {
