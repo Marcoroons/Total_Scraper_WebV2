@@ -4,6 +4,7 @@ Deployed as a separate Railway service alongside worker.py.
 """
 import sys
 import os
+import traceback
 from types import ModuleType
 
 # ── Streamlit stub ────────────────────────────────────────────────────────────
@@ -23,9 +24,9 @@ sys.modules.setdefault("streamlit", _st_stub)
 
 import io
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from supabase import create_client
 
@@ -52,11 +53,28 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"[export-service] Unhandled exception on {request.url.path}:\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
+
+
 def _supabase():
     url = os.environ.get("SUPABASE_URL", "")
     key = os.environ.get("SUPABASE_KEY", "")
     if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Export service is missing Supabase credentials. "
+                "Set SUPABASE_URL and SUPABASE_KEY (service role key) "
+                "in Railway → your export service → Variables."
+            ),
+        )
     return create_client(url, key)
 
 
