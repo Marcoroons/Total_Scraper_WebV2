@@ -14,22 +14,22 @@ export function ProjectSelector() {
     refreshProjects,
   } = useProject();
 
-  const [open, setOpen] = useState(false);
-  const [showNew, setShowNew] = useState(false);
-  const [newName, setNewName] = useState("");
+  const [open,     setOpen]     = useState(false);
+  const [showNew,  setShowNew]  = useState(false);
+  const [newName,  setNewName]  = useState("");
   const [creating, setCreating] = useState(false);
-  const [err, setErr] = useState("");
+  const [err,      setErr]      = useState("");
   const [showTeam, setShowTeam] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    function onOutsideClick(e: MouseEvent) {
+    function onOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
-    document.addEventListener("mousedown", onOutsideClick);
-    return () => document.removeEventListener("mousedown", onOutsideClick);
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
   }, []);
 
   async function handleCreate(e: React.FormEvent) {
@@ -62,60 +62,58 @@ export function ProjectSelector() {
 
   return (
     <div ref={containerRef} className="relative">
+      {/* Trigger */}
       <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 group text-left"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 w-full text-left group"
       >
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 leading-none mb-0.5">
-            Active Project
-          </p>
-          <p className="text-sm font-semibold text-gray-800 group-hover:text-[#1F4E78] transition-colors flex items-center gap-1">
-            {activeProjectName ?? "Select a project"}
-            <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-          </p>
-        </div>
+        <FolderOpen className="w-3.5 h-3.5 text-sidebar-muted-foreground flex-shrink-0" />
+        <span className="flex-1 text-[13px] font-medium text-sidebar-foreground truncate group-hover:text-primary transition-colors">
+          {activeProjectName ?? "Select a project"}
+        </span>
+        <ChevronDown className={[
+          "w-3.5 h-3.5 text-sidebar-muted-foreground transition-transform duration-150 flex-shrink-0",
+          open ? "rotate-180" : "",
+        ].join(" ")} />
       </button>
 
+      {/* Dropdown */}
       {open && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-white rounded-xl border shadow-lg z-50">
-          <div className="py-1.5 max-h-56 overflow-y-auto">
+        <div className="absolute top-full left-0 mt-2 w-64 bg-popover border border-border rounded-lg shadow-card-lg z-[60]">
+          <div className="py-1 max-h-56 overflow-y-auto">
             {availableProjects.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-gray-400 italic">No projects yet.</p>
+              <p className="px-4 py-3 text-sm text-muted-foreground italic">No projects yet.</p>
             ) : (
               availableProjects.map((p) => (
                 <button
                   key={p.project_id}
-                  onClick={() => {
-                    setActiveProject(p);
-                    setOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                  onClick={() => { setActiveProject(p); setOpen(false); }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors text-left"
                 >
-                  <FolderOpen className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  <FolderOpen className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                   <span className="flex-1 truncate">{p.project_name}</span>
                   {p.project_id === activeProjectId && (
-                    <Check className="w-4 h-4 text-[#1F4E78] flex-shrink-0" />
+                    <Check className="w-4 h-4 text-primary flex-shrink-0" />
                   )}
                 </button>
               ))
             )}
           </div>
 
-          <div className="border-t">
+          <div className="border-t border-border">
             {activeProjectId && !showNew && (
               <button
                 onClick={() => { setShowTeam(true); setOpen(false); }}
-                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors border-b"
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-foreground font-medium hover:bg-muted transition-colors border-b border-border"
               >
-                <Users className="w-4 h-4" />
+                <Users className="w-4 h-4 text-muted-foreground" />
                 Manage Team
               </button>
             )}
             {!showNew ? (
               <button
                 onClick={() => setShowNew(true)}
-                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-[#1F4E78] font-medium hover:bg-blue-50 transition-colors"
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-primary font-medium hover:bg-muted transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 New Project
@@ -128,25 +126,21 @@ export function ProjectSelector() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="Project name"
-                  className="w-full px-2.5 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+                  className="w-full px-2.5 py-1.5 bg-input border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
-                {err && <p className="text-xs text-red-500">{err}</p>}
+                {err && <p className="text-xs text-destructive">{err}</p>}
                 <div className="flex gap-2">
                   <button
                     type="submit"
                     disabled={creating || !newName.trim()}
-                    className="flex-1 py-1.5 bg-[#1F4E78] text-white text-xs font-semibold rounded-lg hover:bg-[#2E86AB] disabled:opacity-60 transition-colors"
+                    className="flex-1 py-1.5 bg-primary text-primary-foreground text-xs font-semibold rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
                   >
                     {creating ? "Creating…" : "Create"}
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowNew(false);
-                      setNewName("");
-                      setErr("");
-                    }}
-                    className="px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    onClick={() => { setShowNew(false); setNewName(""); setErr(""); }}
+                    className="px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted rounded-md transition-colors"
                   >
                     Cancel
                   </button>
@@ -160,21 +154,21 @@ export function ProjectSelector() {
       {/* Manage Team modal */}
       {showTeam && activeProjectId && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
           onClick={() => setShowTeam(false)}
         >
           <div
-            className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
+            className="bg-card border border-border rounded-xl shadow-card-lg w-full max-w-lg max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between px-5 py-4 border-b">
+            <div className="flex items-start justify-between px-5 py-4 border-b border-border">
               <div>
-                <h2 className="text-base font-bold text-gray-900">Manage Team</h2>
-                <p className="text-xs text-gray-500 mt-0.5">{activeProjectName}</p>
+                <h2 className="text-base font-bold text-foreground">Manage Team</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">{activeProjectName}</p>
               </div>
               <button
                 onClick={() => setShowTeam(false)}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>

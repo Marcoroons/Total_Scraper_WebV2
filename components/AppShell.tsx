@@ -1,207 +1,325 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Building2,
+  BarChart3,
+  Bell,
   ChevronLeft,
+  FileText,
+  FolderOpen,
   Hash,
+  HelpCircle,
   LayoutDashboard,
-  Link2,
-  ListOrdered,
+  LogOut,
   Menu,
   MessageSquare,
-  Sliders,
+  Settings,
+  Sparkles,
+  TrendingUp,
+  User,
   Users,
+  Video,
   X,
+  Timer,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 import { ProjectSelector } from "@/components/ProjectSelector";
-import { UserMenu } from "@/components/UserMenu";
 
-const NAV = [
-  { href: "/dashboard",       label: "Dashboard",       icon: LayoutDashboard, tour: "dashboard" },
-  { href: "/profile-tracker", label: "Profile Tracker", icon: Users,           tour: "profile-tracker" },
-  { href: "/url-stats",       label: "URL Stats",        icon: Link2,           tour: "url-stats" },
-  { href: "/comments",        label: "Comments",         icon: MessageSquare,   tour: "comments" },
-  { href: "/hashtags",        label: "Hashtags",         icon: Hash,            tour: "hashtags" },
-  { href: "/queue",           label: "Queue",            icon: ListOrdered,     tour: "queue" },
-  { href: "/competitor",      label: "Competitor",       icon: Building2,       tour: "competitor" },
-  { href: "/nlp-settings",    label: "NLP Settings",     icon: Sliders,         tour: "nlp-settings" },
-] as const;
+/* ── Nav structure matching Figma ── */
+type NavItem = { href: string; label: string; icon: React.ElementType; tour?: string };
+type NavGroup = { label?: string; items: NavItem[] };
 
-export function AppShell({
-  email,
-  children,
-}: {
-  email: string;
-  children: React.ReactNode;
-}) {
+const NAV: NavGroup[] = [
+  {
+    items: [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tour: "dashboard" },
+    ],
+  },
+  {
+    label: "SCRAPERS",
+    items: [
+      { href: "/url-stats",       label: "Video URL Scraper",   icon: Video,         tour: "url-stats" },
+      { href: "/profile-tracker", label: "Profile Scraper",     icon: User,          tour: "profile-tracker" },
+      { href: "/comments",        label: "Comment Sentiment",   icon: MessageSquare, tour: "comments" },
+      { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          tour: "hashtags" },
+      { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    tour: "competitor" },
+    ],
+  },
+  {
+    label: "OPERATIONS",
+    items: [
+      { href: "/queue", label: "Queue & Export", icon: Timer, tour: "queue" },
+    ],
+  },
+  {
+    label: "TOOLS",
+    items: [
+      { href: "/nlp-settings", label: "NLP Settings",  icon: Settings,  tour: "nlp-settings" },
+      { href: "/queue",        label: "Report Builder", icon: FileText,  tour: "report-builder" },
+    ],
+  },
+  {
+    label: "MANAGEMENT",
+    items: [
+      { href: "/teams",    label: "Teams",    icon: Users,      tour: "teams" },
+      { href: "/projects", label: "Projects", icon: FolderOpen, tour: "projects" },
+    ],
+  },
+];
+
+/* Page title derived from pathname */
+const TITLES: Record<string, string> = {
+  "/dashboard":       "Dashboard",
+  "/url-stats":       "Video URL Scraper",
+  "/profile-tracker": "Profile Scraper",
+  "/comments":        "Comment Sentiment",
+  "/hashtags":        "Hashtag / Trends",
+  "/queue":           "Queue & Export",
+  "/competitor":      "Competitor Analysis",
+  "/nlp-settings":    "NLP Settings",
+  "/teams":           "Teams",
+  "/projects":        "Projects",
+};
+
+function getTitle(pathname: string) {
+  for (const [path, title] of Object.entries(TITLES)) {
+    if (pathname.startsWith(path)) return title;
+  }
+  return "Total Scraper";
+}
+
+function initials(email: string) {
+  const name = email.split("@")[0];
+  const parts = name.split(/[._\-+]/);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || name.slice(0, 2).toUpperCase();
+}
+
+export function AppShell({ email, children }: { email: string; children: React.ReactNode }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const router   = useRouter();
+  const [collapsed,   setCollapsed]   = useState(false);
+  const [mobileOpen,  setMobileOpen]  = useState(false);
 
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
+  const pageTitle = getTitle(pathname);
+  const userInitials = initials(email);
 
+  /* Close mobile drawer on navigation */
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  /* Ctrl/Cmd+B to toggle sidebar */
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
+    const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
-        setCollapsed((c) => !c);
+        setCollapsed(c => !c);
       }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden"
           onClick={() => setMobileOpen(false)}
         />
       )}
 
-      {/* ── Sidebar ── */}
+      {/* ══════════════ SIDEBAR ══════════════ */}
       <aside
+        style={{ width: collapsed ? "3.5rem" : "17rem" }}
         className={[
-          "fixed inset-y-0 left-0 z-50 flex flex-col bg-sidebar border-r border-sidebar-border",
-          "transition-all duration-200 ease-in-out w-60",
+          "fixed inset-y-0 left-0 z-50 flex flex-col",
+          "bg-sidebar border-r border-sidebar-border",
+          "transition-[width] duration-200 ease-in-out",
+          /* Mobile: slide in/out */
           mobileOpen ? "translate-x-0 shadow-card-lg" : "-translate-x-full",
           "md:relative md:z-auto md:translate-x-0 md:shadow-none",
-          collapsed ? "md:w-[3.5rem]" : "md:w-60",
+          /* Mobile is always expanded */
+          "w-[17rem]",
         ].join(" ")}
       >
-        {/* Logo row */}
-        <div className="flex items-center h-14 px-3 border-b border-sidebar-border flex-shrink-0 gap-2">
+        {/* ── Logo row ── */}
+        <div className="flex items-center h-14 px-3 border-b border-sidebar-border gap-2 flex-shrink-0">
           <Link
             href="/dashboard"
             data-tour="logo"
             className={[
-              "flex items-center gap-2.5 flex-1 min-w-0",
+              "flex items-center gap-2.5 flex-1 min-w-0 overflow-hidden",
               collapsed ? "md:justify-center" : "",
             ].join(" ")}
           >
-            <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center flex-shrink-0">
-              <span className="text-[11px] font-bold text-white leading-none">TS</span>
+            <div className="w-8 h-8 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center flex-shrink-0">
+              <span className="text-[11px] font-bold text-primary leading-none">TS</span>
             </div>
-            {!collapsed && (
-              <div className="min-w-0 hidden md:block">
-                <p className="text-sm font-bold text-sidebar-foreground leading-tight truncate">
-                  Total Scraper
-                </p>
-                <p className="text-[9px] text-sidebar-muted-foreground uppercase tracking-widest leading-tight">
-                  Cimory Intel
-                </p>
-              </div>
-            )}
-            {/* Always show name on mobile */}
-            <div className="min-w-0 md:hidden">
-              <p className="text-sm font-bold text-sidebar-foreground leading-tight truncate">
-                Total Scraper
-              </p>
-              <p className="text-[9px] text-sidebar-muted-foreground uppercase tracking-widest leading-tight">
-                Cimory Intel
-              </p>
-            </div>
+            <span className={["text-sm font-semibold text-sidebar-foreground truncate", collapsed ? "md:hidden" : ""].join(" ")}>
+              Total Scraper
+            </span>
           </Link>
 
           {/* Desktop collapse toggle */}
           <button
-            onClick={() => setCollapsed((c) => !c)}
+            onClick={() => setCollapsed(c => !c)}
             title={collapsed ? "Expand (Ctrl+B)" : "Collapse (Ctrl+B)"}
             className="hidden md:flex w-6 h-6 items-center justify-center rounded text-sidebar-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors flex-shrink-0"
           >
-            <ChevronLeft
-              className={[
-                "w-3.5 h-3.5 transition-transform duration-200",
-                collapsed ? "rotate-180" : "",
-              ].join(" ")}
-            />
+            <ChevronLeft className={["w-4 h-4 transition-transform duration-200", collapsed ? "rotate-180" : ""].join(" ")} />
           </button>
 
           {/* Mobile close */}
-          <button
-            onClick={() => setMobileOpen(false)}
-            className="md:hidden flex w-7 h-7 items-center justify-center rounded text-sidebar-muted-foreground hover:text-sidebar-foreground"
-          >
+          <button onClick={() => setMobileOpen(false)} className="md:hidden w-7 h-7 flex items-center justify-center rounded text-sidebar-muted-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Nav links */}
-        <nav className="flex-1 py-2 overflow-y-auto overflow-x-hidden" data-tour="nav">
-          <div className="px-2 space-y-0.5">
-            {NAV.map(({ href, label, icon: Icon, tour }, idx) => {
-              const isActive = pathname.startsWith(href);
-              const showDivider = idx === 7; /* before NLP Settings */
-              return (
-                <div key={href}>
-                  {showDivider && (
-                    <div className="h-px bg-sidebar-border mx-1 my-2" />
-                  )}
-                  <Link
-                    href={href}
-                    title={collapsed ? label : undefined}
-                    data-tour={tour}
-                    className={[
-                      "flex items-center gap-3 px-2.5 py-2 rounded-lg text-[13px] transition-colors",
-                      collapsed ? "md:justify-center md:px-2" : "",
-                      isActive
-                        ? "bg-white/15 text-sidebar-foreground font-semibold"
-                        : "text-sidebar-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent",
-                    ].join(" ")}
-                  >
-                    <Icon className="w-4 h-4 flex-shrink-0" />
-                    {!collapsed && <span className="truncate">{label}</span>}
-                    {/* Mobile always shows label */}
-                    {collapsed && <span className="truncate md:hidden">{label}</span>}
-                  </Link>
-                </div>
-              );
-            })}
+        {/* ── Project selector ── */}
+        {!collapsed && (
+          <div
+            className="px-3 py-2.5 border-b border-sidebar-border flex-shrink-0"
+            data-tour="project-selector"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-muted-foreground mb-1.5 px-0.5">
+              Active Project
+            </p>
+            <ProjectSelector />
           </div>
+        )}
+
+        {/* ── Navigation ── */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2" data-tour="nav">
+          {NAV.map((group, gi) => (
+            <div key={gi} className={gi > 0 ? "mt-2" : ""}>
+              {/* Section header */}
+              {group.label && (
+                <p className={[
+                  "px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-muted-foreground select-none",
+                  collapsed ? "md:hidden" : "pt-2",
+                ].join(" ")}>
+                  {group.label}
+                </p>
+              )}
+              {/* Divider when collapsed */}
+              {group.label && collapsed && <div className="h-px bg-sidebar-border mx-2 mt-2 mb-1" />}
+
+              <div className="px-2 space-y-0.5">
+                {group.items.map(({ href, label, icon: Icon, tour }) => {
+                  const isActive = href === "/dashboard"
+                    ? pathname === "/dashboard" || pathname === "/"
+                    : pathname.startsWith(href) && label !== "Report Builder";
+                  return (
+                    <Link
+                      key={`${href}-${label}`}
+                      href={href}
+                      title={collapsed ? label : undefined}
+                      data-tour={tour}
+                      className={[
+                        "group flex items-center gap-2.5 py-1.5 rounded-md text-[13px] transition-all duration-150",
+                        "border-l-2",
+                        collapsed
+                          ? "md:justify-center md:px-2 px-2.5 pl-[9px]"
+                          : "px-2 pl-[7px]",
+                        isActive
+                          ? "bg-sidebar-active text-primary font-medium border-primary"
+                          : "text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent border-transparent",
+                      ].join(" ")}
+                    >
+                      <Icon className={[
+                        "w-4 h-4 flex-shrink-0 transition-colors",
+                        isActive ? "text-primary" : "group-hover:text-sidebar-foreground",
+                      ].join(" ")} />
+                      {(!collapsed || true) && (
+                        <span className={["truncate", collapsed ? "md:hidden" : ""].join(" ")}>
+                          {label}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
-        {/* Sidebar footer */}
-        <div
-          className={[
-            "px-3 py-2.5 border-t border-sidebar-border flex-shrink-0",
-            collapsed ? "md:hidden" : "",
-          ].join(" ")}
-        >
-          <p className="text-[10px] text-sidebar-muted-foreground truncate">
-            v2 · Cimory FMCG Intel
-          </p>
+        {/* ── User at bottom ── */}
+        <div className="flex-shrink-0 border-t border-sidebar-border px-3 py-3">
+          {collapsed ? (
+            <div className="flex justify-center">
+              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground cursor-default">
+                {userInitials}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 text-xs font-bold text-primary-foreground">
+                {userInitials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-sidebar-foreground truncate leading-tight">{email}</p>
+              </div>
+              <button
+                onClick={handleSignOut}
+                title="Sign out"
+                className="w-6 h-6 flex items-center justify-center rounded text-sidebar-muted-foreground hover:text-primary transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
-      {/* ── Main area ── */}
+      {/* ══════════════ MAIN AREA ══════════════ */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* Header */}
-        <header className="h-14 flex-shrink-0 bg-card border-b flex items-center px-4 gap-3">
+
+        {/* ── Header ── */}
+        <header className="h-14 flex-shrink-0 bg-card border-b border-border flex items-center px-5 gap-4">
           {/* Mobile hamburger */}
           <button
             onClick={() => setMobileOpen(true)}
             className="md:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            aria-label="Open sidebar"
+            aria-label="Open menu"
           >
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex-1 min-w-0" data-tour="project-selector">
-            <ProjectSelector />
-          </div>
+          {/* Page title */}
+          <h1 className="text-[15px] font-semibold text-foreground flex-1 truncate">
+            {pageTitle}
+          </h1>
 
-          <UserMenu email={email} />
+          {/* Right: Tour / Bell / Help */}
+          <div className="flex items-center gap-1">
+            <button
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors"
+              data-tour="tour-trigger"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-primary" />
+              Tour
+            </button>
+            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title="Notifications">
+              <Bell className="w-4 h-4" />
+            </button>
+            <button className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title="Help">
+              <HelpCircle className="w-4 h-4" />
+            </button>
+          </div>
         </header>
 
-        {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6 animate-fade-in">
+        {/* ── Page content ── */}
+        <main className="flex-1 overflow-y-auto p-6">
           {children}
         </main>
       </div>

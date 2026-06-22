@@ -49,29 +49,24 @@ const config: Config = {
           "primary-foreground": "hsl(var(--sidebar-primary-foreground))",
           accent: "hsl(var(--sidebar-accent))",
           "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
+          active: "hsl(var(--sidebar-active))",
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
           "muted-foreground": "hsl(var(--sidebar-muted-foreground))",
         },
-        /* Legacy direct-hex brand colours — keep for backward compat */
-        brand: {
-          navy: "#1F4E78",
-          blue: "#2E86AB",
-          "light-blue": "#EBF3FB",
-        },
       },
       borderRadius: {
-        sm: "calc(var(--radius) - 4px)",   /* 8px  */
-        md: "calc(var(--radius) - 2px)",   /* 10px */
-        lg: "var(--radius)",               /* 12px */
-        xl: "calc(var(--radius) + 4px)",   /* 16px */
-        "2xl": "calc(var(--radius) + 8px)",/* 20px */
+        sm:   "calc(var(--radius) - 2px)",
+        md:   "var(--radius)",
+        lg:   "calc(var(--radius) + 2px)",
+        xl:   "calc(var(--radius) + 4px)",
+        "2xl":"calc(var(--radius) + 8px)",
       },
       boxShadow: {
-        card: "0 1px 3px 0 rgb(0 0 0 / 0.08), 0 1px 2px -1px rgb(0 0 0 / 0.05)",
-        "card-md": "0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05)",
-        "card-lg": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05)",
-        focus: "0 0 0 3px hsl(var(--ring) / 0.25)",
+        card:    "0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.2)",
+        "card-md":"0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2)",
+        "card-lg":"0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.3)",
+        glow:    "0 0 0 3px hsl(var(--primary) / 0.25)",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
@@ -87,7 +82,7 @@ const config: Config = {
         },
       },
       animation: {
-        "fade-in":   "fade-in 0.18s ease-out",
+        "fade-in":    "fade-in 0.18s ease-out",
         "slide-left": "slide-left 0.2s ease-out",
       },
     },

@@ -146,16 +146,16 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
-      {/* Header row with add button */}
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-muted-foreground">
           {members.length} member{members.length !== 1 ? "s" : ""}
         </p>
         {!showAdd && (
           <button
             type="button"
             onClick={() => { setShowAdd(true); setAddError(""); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1F4E78] border border-[#1F4E78]/30 rounded-lg hover:bg-blue-50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-primary border border-primary/30 rounded-lg hover:bg-primary/10 transition-colors"
           >
             <UserPlus className="w-3.5 h-3.5" />
             Add Member
@@ -165,8 +165,8 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
 
       {/* Add member form */}
       {showAdd && (
-        <form onSubmit={handleAdd} className="bg-gray-50 border rounded-xl p-3 space-y-2">
-          <label className="block text-xs font-semibold text-gray-600">Invite by email</label>
+        <form onSubmit={handleAdd} className="bg-muted border border-border rounded-xl p-3 space-y-2">
+          <label className="block text-xs font-semibold text-muted-foreground">Invite by email</label>
           <div className="flex gap-2">
             <input
               autoFocus
@@ -174,66 +174,66 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
               placeholder="teammate@example.com"
-              className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+              className="flex-1 px-3 py-1.5 text-sm bg-input border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <button
               type="submit"
               disabled={adding || !newEmail.trim()}
-              className="px-4 py-1.5 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] disabled:opacity-60 transition-colors"
+              className="px-4 py-1.5 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
               {adding ? "Adding…" : "Add"}
             </button>
             <button
               type="button"
               onClick={() => { setShowAdd(false); setNewEmail(""); setAddError(""); }}
-              className="p-1.5 text-gray-400 hover:text-gray-600"
+              className="p-1.5 text-muted-foreground hover:text-foreground"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
-          {addError && <p className="text-xs text-red-500">{addError}</p>}
-          <p className="text-xs text-gray-400">
+          {addError && <p className="text-xs text-destructive">{addError}</p>}
+          <p className="text-xs text-muted-foreground">
             If they already have an account they&apos;re added immediately. Otherwise the invite is saved and activates when they sign up.
           </p>
         </form>
       )}
 
-      {/* Pending-invite notice after a successful invite */}
+      {/* Notice */}
       {addNotice && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700">
+        <div className="bg-primary/10 border border-primary/20 rounded-xl p-3 text-xs text-primary">
           {addNotice}
         </div>
       )}
 
       {/* Members list */}
       {loading ? (
-        <div className="flex items-center justify-center py-8 text-gray-400">
+        <div className="flex items-center justify-center py-8 text-muted-foreground">
           <Loader2 className="w-5 h-5 animate-spin" />
         </div>
       ) : error ? (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-600">{error}</div>
+        <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-3 text-sm text-destructive">{error}</div>
       ) : (
-        <ul className="divide-y divide-gray-100 border rounded-xl overflow-hidden">
+        <ul className="divide-y divide-border border border-border rounded-xl overflow-hidden">
           {members.map((m) => {
             const isOwner = m.role === "owner";
             const isSelf  = m.user_id === currentUserId;
             const canRemove = !isOwner && !isSelf;
             return (
-              <li key={m.user_id} className="flex items-center gap-3 px-4 py-3 bg-white">
-                <div className="w-8 h-8 rounded-full bg-[#1F4E78]/10 flex items-center justify-center text-xs font-bold text-[#1F4E78] uppercase flex-shrink-0">
+              <li key={m.user_id} className="flex items-center gap-3 px-4 py-3 bg-card">
+                <div className="w-8 h-8 rounded-full bg-primary/15 flex items-center justify-center text-xs font-bold text-primary uppercase flex-shrink-0">
                   {m.email.charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-foreground truncate flex items-center gap-1.5">
                     {m.email}
                     {isOwner && (
-                      <span title="Owner" className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                      <span title="Owner" className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-primary bg-primary/15 px-1.5 py-0.5 rounded">
                         <Crown className="w-3 h-3" /> Owner
                       </span>
                     )}
-                    {isSelf && <span className="text-[10px] text-gray-400">(you)</span>}
+                    {isSelf && <span className="text-[10px] text-muted-foreground">(you)</span>}
                   </p>
-                  <p className="text-xs text-gray-400">Joined {formatDate(m.created_at)}</p>
+                  <p className="text-xs text-muted-foreground">Joined {formatDate(m.created_at)}</p>
                 </div>
                 {canRemove && (
                   <button
@@ -241,7 +241,7 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
                     onClick={() => handleRemove(m)}
                     disabled={removingId === m.user_id}
                     title="Remove member"
-                    className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                    className="p-1.5 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-40"
                   >
                     {removingId === m.user_id ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -259,30 +259,30 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
       {/* Pending invites */}
       {!loading && !error && pending.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Pending invites
           </p>
-          <ul className="divide-y divide-gray-100 border rounded-xl overflow-hidden">
+          <ul className="divide-y divide-border border border-border rounded-xl overflow-hidden">
             {pending.map((inv) => (
-              <li key={inv.email} className="flex items-center gap-3 px-4 py-3 bg-white">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-                  <Clock className="w-4 h-4 text-gray-400" />
+              <li key={inv.email} className="flex items-center gap-3 px-4 py-3 bg-card">
+                <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-4 h-4 text-muted-foreground" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-700 truncate flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-foreground truncate flex items-center gap-1.5">
                     {inv.email}
-                    <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                    <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                       Pending
                     </span>
                   </p>
-                  <p className="text-xs text-gray-400">Invited {formatDate(inv.created_at)}</p>
+                  <p className="text-xs text-muted-foreground">Invited {formatDate(inv.created_at)}</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => handleCancelInvite(inv.email)}
                   disabled={cancelingEmail === inv.email}
                   title="Cancel invite"
-                  className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                  className="p-1.5 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-40"
                 >
                   {cancelingEmail === inv.email ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
