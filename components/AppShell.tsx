@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   Clock,
   Database,
+  FolderOpen,
   Hash,
   HelpCircle,
   LayoutDashboard,
