@@ -65,16 +65,19 @@ export function ProjectSelector() {
       {/* Trigger */}
       <button
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1.5 w-full text-left group"
+        className="w-full flex items-center justify-between px-2 py-1.5 rounded transition-colors"
+        style={{ background: open ? "rgba(0,201,255,0.05)" : "transparent" }}
       >
-        <FolderOpen className="w-3.5 h-3.5 text-sidebar-muted-foreground flex-shrink-0" />
-        <span className="flex-1 text-[13px] font-medium text-sidebar-foreground truncate group-hover:text-primary transition-colors">
-          {activeProjectName ?? "Select a project"}
-        </span>
-        <ChevronDown className={[
-          "w-3.5 h-3.5 text-sidebar-muted-foreground transition-transform duration-150 flex-shrink-0",
-          open ? "rotate-180" : "",
-        ].join(" ")} />
+        <div className="flex items-center gap-2 min-w-0">
+          <FolderOpen className="w-3 h-3 flex-shrink-0" style={{ color: "#3a4d68" }} />
+          <span className="text-xs font-medium truncate" style={{ color: "#c8d8ed" }}>
+            {activeProjectName ?? "Select a project"}
+          </span>
+        </div>
+        <ChevronDown
+          className={["w-3 h-3 flex-shrink-0 transition-transform duration-150", open ? "rotate-180" : ""].join(" ")}
+          style={{ color: "#5a7294" }}
+        />
       </button>
 
       {/* Dropdown */}

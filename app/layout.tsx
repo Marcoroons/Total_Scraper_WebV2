@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Outfit } from "next/font/google";
 import "./globals.css";
 import { createClient } from "@/lib/supabase/server";
 import { ProjectProvider } from "@/lib/context/ProjectContext";
 import { AppShell } from "@/components/AppShell";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
 
 export const metadata: Metadata = {
   title: "Total Scraper",
@@ -26,7 +27,7 @@ export default async function RootLayout({
   if (!user) {
     return (
       <html lang="en">
-        <body className={inter.className}>{children}</body>
+        <body className={`${inter.variable} ${outfit.variable} font-sans`}>{children}</body>
       </html>
     );
   }
@@ -34,7 +35,7 @@ export default async function RootLayout({
   /* Authenticated: full app shell */
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body className={`${inter.variable} ${outfit.variable} font-sans`}>
         <ProjectProvider>
           <AppShell email={user.email ?? ""}>
             {children}
