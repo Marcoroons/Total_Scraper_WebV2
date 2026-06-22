@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   Clock,
   Database,
-  FileText,
   FolderOpen,
   Hash,
   HelpCircle,
@@ -57,8 +56,7 @@ const NAV: NavSection[] = [
   {
     label: "TOOLS",
     items: [
-      { href: "/nlp-settings", label: "NLP Settings",   icon: Brain,    color: "#f472b6" },
-      { href: "/queue",        label: "Report Builder", icon: FileText, color: "#00c9ff" },
+      { href: "/nlp-settings", label: "NLP Settings", icon: Brain, color: "#f472b6" },
     ],
   },
   {
