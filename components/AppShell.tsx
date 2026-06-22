@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   Clock,
   Database,
-  FolderOpen,
   Hash,
   HelpCircle,
   LayoutDashboard,
@@ -24,7 +23,6 @@ import {
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { ProjectSelector } from "@/components/ProjectSelector";
 import { useProject } from "@/lib/context/ProjectContext";
 
 /* ── Nav structure matching Figma exactly ── */
@@ -195,25 +193,25 @@ export function AppShell({ email, children }: { email: string; children: React.R
           </button>
         </div>
 
-        {/* ── Project selector ── */}
+        {/* ── Active project indicator ── */}
         {!collapsed && (
           <div
-            className="px-2.5 py-2.5 space-y-1 flex-shrink-0"
+            className="px-2.5 py-2.5 flex-shrink-0"
             style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
             data-tour="project-selector"
           >
-            {/* Active project indicator row */}
-            <div className="flex items-center gap-2 px-2 py-1">
+            <Link
+              href="/projects"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors hover:bg-white/5"
+            >
               <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: "#00c9ff" }} />
               <span className="font-mono text-[10px] uppercase tracking-wider flex-shrink-0" style={{ color: "#3a4d68" }}>
                 Project
               </span>
               <span className="text-xs font-medium truncate" style={{ color: "#c8d8ed" }}>
-                {activeProjectName ?? "No project"}
+                {activeProjectName ?? "Select project"}
               </span>
-            </div>
-            {/* Project switcher dropdown */}
-            <ProjectSelector />
+            </Link>
           </div>
         )}
 
