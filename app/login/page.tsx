@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Database, Shield, Zap, Globe } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -16,7 +16,9 @@ const inputCls =
   "w-full px-3 py-2.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
 export default function LoginPage() {
-  const router = useRouter();
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const justCreated  = searchParams.get("created") === "1";
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
@@ -113,6 +115,15 @@ export default function LoginPage() {
               Welcome back
             </h1>
             <p className="text-sm text-muted-foreground mb-6">Sign in to your account</p>
+
+            {justCreated && (
+              <div
+                className="rounded-lg px-3 py-2.5 text-sm mb-4"
+                style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981" }}
+              >
+                Account created — sign in with your new credentials.
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

@@ -14,9 +14,6 @@ const FEATURES = [
 const inputCls =
   "w-full px-3 py-2.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
-const TIMEOUT_MS   = 12_000;
-const SLOW_COPY_MS =  4_000;
-
 export default function SignupPage() {
   const router = useRouter();
   const [email,       setEmail]       = useState("");
@@ -24,31 +21,30 @@ export default function SignupPage() {
   const [inviteCode,  setInviteCode]  = useState("");
   const [error,       setError]       = useState("");
   const [loading,     setLoading]     = useState(false);
-  const [slow,        setSlow]        = useState(false);
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    setSlow(false);
-
-    const slowTimer = setTimeout(() => setSlow(true), SLOW_COPY_MS);
-    const controller = new AbortController();
-    const hardTimeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, inviteCode }),
-        signal: controller.signal,
       });
-      clearTimeout(hardTimeout);
 
       const data = await res.json();
+
       if (!res.ok) {
         setError(data.error ?? "Signup failed. Please try again.");
+        return;
+      }
+
+      if (data.signInFailed) {
+        // Account created but auto sign-in failed — send to login
+        router.push("/login?created=1");
         return;
       }
 
@@ -58,18 +54,10 @@ export default function SignupPage() {
         router.push("/dashboard");
         router.refresh();
       }
-    } catch (err) {
-      const name = (err as Error).name;
-      if (name === "AbortError" || name === "TimeoutError") {
-        setError("Request timed out — Supabase email may be slow. Wait a few seconds then try again, or check your connection.");
-      } else {
-        setError("Network error. Check your connection and try again.");
-      }
+    } catch {
+      setError("Network error. Check your connection and try again.");
     } finally {
-      clearTimeout(slowTimer);
-      clearTimeout(hardTimeout);
       setLoading(false);
-      setSlow(false);
     }
   }
 
@@ -234,15 +222,8 @@ export default function SignupPage() {
                 className="w-full py-2.5 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60 mt-2"
                 style={{ background: "linear-gradient(135deg, #00c9ff, #0087d8)", color: "#060c18" }}
               >
-                {loading
-                  ? slow ? "Still working…" : "Creating account…"
-                  : "Sign Up"}
+                {loading ? "Creating account…" : "Sign Up"}
               </button>
-              {loading && slow && (
-                <p className="text-[11px] text-center text-muted-foreground mt-2">
-                  Sending confirmation email — this can take a few seconds.
-                </p>
-              )}
             </form>
 
             <p className="text-sm text-center text-muted-foreground mt-6">
