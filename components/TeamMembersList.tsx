@@ -1,12 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Crown, Loader2, Trash2, UserPlus, X } from "lucide-react";
+import { Clock, Crown, Loader2, Trash2, UserPlus, X } from "lucide-react";
 
 interface Member {
   user_id: string;
   email: string;
   role: string;
+  created_at: string;
+}
+
+interface PendingInvite {
+  email: string;
   created_at: string;
 }
 
@@ -20,6 +25,7 @@ function formatDate(iso: string) {
 
 export function TeamMembersList({ projectId }: { projectId: string }) {
   const [members, setMembers] = useState<Member[]>([]);
+  const [pending, setPending] = useState<PendingInvite[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -28,8 +34,10 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
   const [newEmail, setNewEmail] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
+  const [addNotice, setAddNotice] = useState("");
 
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [cancelingEmail, setCancelingEmail] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,8 +49,13 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
         setError(body.error ?? "Failed to load members.");
         return;
       }
-      const data = (await res.json()) as { members: Member[]; current_user_id: string };
+      const data = (await res.json()) as {
+        members: Member[];
+        pending?: PendingInvite[];
+        current_user_id: string;
+      };
       setMembers(data.members);
+      setPending(data.pending ?? []);
       setCurrentUserId(data.current_user_id);
     } catch {
       setError("Network error loading members.");
@@ -58,16 +71,24 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
     if (!newEmail.trim()) return;
     setAdding(true);
     setAddError("");
+    setAddNotice("");
     try {
       const res = await fetch(`/api/projects/${projectId}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: newEmail.trim() }),
       });
-      const body = await res.json().catch(() => ({}));
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        pending?: boolean;
+        email?: string;
+      };
       if (!res.ok) {
         setAddError(body.error ?? "Failed to add member.");
         return;
+      }
+      if (body.pending) {
+        setAddNotice(`Invitation saved — ${body.email} will join automatically when they sign up.`);
       }
       setNewEmail("");
       setShowAdd(false);
@@ -76,6 +97,28 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
       setAddError("Network error — could not add member.");
     } finally {
       setAdding(false);
+    }
+  }
+
+  async function handleCancelInvite(email: string) {
+    if (!confirm(`Cancel the pending invite for ${email}?`)) return;
+    setCancelingEmail(email);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/members`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error ?? "Failed to cancel invite.");
+        return;
+      }
+      await load();
+    } catch {
+      alert("Network error — could not cancel invite.");
+    } finally {
+      setCancelingEmail(null);
     }
   }
 
@@ -150,9 +193,16 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
           </div>
           {addError && <p className="text-xs text-red-500">{addError}</p>}
           <p className="text-xs text-gray-400">
-            The person must already have an account. They&apos;ll see this project the next time their list refreshes.
+            If they already have an account they&apos;re added immediately. Otherwise the invite is saved and activates when they sign up.
           </p>
         </form>
+      )}
+
+      {/* Pending-invite notice after a successful invite */}
+      {addNotice && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700">
+          {addNotice}
+        </div>
       )}
 
       {/* Members list */}
@@ -204,6 +254,46 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
             );
           })}
         </ul>
+      )}
+
+      {/* Pending invites */}
+      {!loading && !error && pending.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+            Pending invites
+          </p>
+          <ul className="divide-y divide-gray-100 border rounded-xl overflow-hidden">
+            {pending.map((inv) => (
+              <li key={inv.email} className="flex items-center gap-3 px-4 py-3 bg-white">
+                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <Clock className="w-4 h-4 text-gray-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-700 truncate flex items-center gap-1.5">
+                    {inv.email}
+                    <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                      Pending
+                    </span>
+                  </p>
+                  <p className="text-xs text-gray-400">Invited {formatDate(inv.created_at)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCancelInvite(inv.email)}
+                  disabled={cancelingEmail === inv.email}
+                  title="Cancel invite"
+                  className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                >
+                  {cancelingEmail === inv.email ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <X className="w-4 h-4" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

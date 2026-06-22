@@ -58,7 +58,19 @@ export async function GET(
     created_at: m.created_at,
   }));
 
-  return NextResponse.json({ members: enriched, current_user_id: user.id });
+  // Pending invites (emails that don't have an account / haven't claimed yet).
+  // Best-effort: if the project_invites table isn't migrated, treat as none.
+  const { data: pending } = await supabase
+    .from("project_invites")
+    .select("email, created_at")
+    .eq("project_id", params.id)
+    .order("created_at", { ascending: true });
+
+  return NextResponse.json({
+    members: enriched,
+    pending: pending ?? [],
+    current_user_id: user.id,
+  });
 }
 
 // ── POST — invite a user to the project by email ────────────────────────────
@@ -91,12 +103,21 @@ export async function POST(
     .maybeSingle();
 
   if (!profile) {
-    // Option (a): require the user to have an account already.
-    // Future improvement: store a pending invite that activates on signup
-    // (the reference app does this via team_invites + _process_invites).
+    // No account yet → store a pending invite. It auto-converts to a
+    // project_members row the first time that email loads their projects
+    // after signing up (see claiming logic in GET /api/projects).
+    const { error: invErr } = await supabase
+      .from("project_invites")
+      .upsert(
+        { project_id: params.id, email: cleanEmail, invited_by: user.id },
+        { onConflict: "project_id,email", ignoreDuplicates: true }
+      );
+    if (invErr) {
+      return NextResponse.json({ error: invErr.message }, { status: 500 });
+    }
     return NextResponse.json(
-      { error: "That email has no account yet — they must sign up first, then you can add them." },
-      { status: 404 }
+      { pending: true, email: cleanEmail },
+      { status: 201 }
     );
   }
 
@@ -144,9 +165,22 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { user_id: targetId } = (await request.json()) as { user_id?: string };
+  const body = (await request.json()) as { user_id?: string; email?: string };
+
+  // Cancel a pending invite (no account yet) by email.
+  if (body.email && !body.user_id) {
+    const { error: cancelErr } = await supabase
+      .from("project_invites")
+      .delete()
+      .eq("project_id", params.id)
+      .eq("email", body.email.trim().toLowerCase());
+    if (cancelErr) return NextResponse.json({ error: cancelErr.message }, { status: 500 });
+    return new NextResponse(null, { status: 204 });
+  }
+
+  const targetId = body.user_id;
   if (!targetId) {
-    return NextResponse.json({ error: "user_id is required" }, { status: 400 });
+    return NextResponse.json({ error: "user_id or email is required" }, { status: 400 });
   }
 
   // Look up the target's membership so we can guard the owner.

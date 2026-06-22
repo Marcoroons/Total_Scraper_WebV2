@@ -15,6 +15,31 @@ export async function GET() {
   const SELECT = "project_id, project_name, user_id, team_id";
   type Proj = { project_id: string; project_name: string; user_id: string | null; team_id: string | null };
 
+  // 0. Claim any pending invites addressed to this user's email. This is the
+  //    single chokepoint that "activates" an invite created before the user had
+  //    an account — runs on every projects fetch, so it works regardless of how
+  //    the user signed up or logged in. Best-effort: ignored if table missing.
+  if (user.email) {
+    const { data: invites } = await supabase
+      .from("project_invites")
+      .select("id, project_id")
+      .eq("email", user.email.toLowerCase());
+    if (invites && invites.length > 0) {
+      await supabase.from("project_members").upsert(
+        invites.map((inv) => ({
+          project_id: inv.project_id,
+          user_id:    user.id,
+          role:       "member",
+        })),
+        { onConflict: "project_id,user_id", ignoreDuplicates: true }
+      );
+      await supabase
+        .from("project_invites")
+        .delete()
+        .in("id", invites.map((inv) => inv.id));
+    }
+  }
+
   // 1. Personal projects owned directly by this user.
   const { data: personal } = await supabase
     .from("projects")
