@@ -1,0 +1,210 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { Crown, Loader2, Trash2, UserPlus, X } from "lucide-react";
+
+interface Member {
+  user_id: string;
+  email: string;
+  role: string;
+  created_at: string;
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString("en-SG", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+export function TeamMembersList({ projectId }: { projectId: string }) {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState("");
+
+  const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${projectId}/members`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error ?? "Failed to load members.");
+        return;
+      }
+      const data = (await res.json()) as { members: Member[]; current_user_id: string };
+      setMembers(data.members);
+      setCurrentUserId(data.current_user_id);
+    } catch {
+      setError("Network error loading members.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newEmail.trim()) return;
+    setAdding(true);
+    setAddError("");
+    try {
+      const res = await fetch(`/api/projects/${projectId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: newEmail.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAddError(body.error ?? "Failed to add member.");
+        return;
+      }
+      setNewEmail("");
+      setShowAdd(false);
+      await load();
+    } catch {
+      setAddError("Network error — could not add member.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleRemove(member: Member) {
+    if (!confirm(`Remove ${member.email} from this project?`)) return;
+    setRemovingId(member.user_id);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/members`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: member.user_id }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error ?? "Failed to remove member.");
+        return;
+      }
+      await load();
+    } catch {
+      alert("Network error — could not remove member.");
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header row with add button */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-500">
+          {members.length} member{members.length !== 1 ? "s" : ""}
+        </p>
+        {!showAdd && (
+          <button
+            type="button"
+            onClick={() => { setShowAdd(true); setAddError(""); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1F4E78] border border-[#1F4E78]/30 rounded-lg hover:bg-blue-50 transition-colors"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            Add Member
+          </button>
+        )}
+      </div>
+
+      {/* Add member form */}
+      {showAdd && (
+        <form onSubmit={handleAdd} className="bg-gray-50 border rounded-xl p-3 space-y-2">
+          <label className="block text-xs font-semibold text-gray-600">Invite by email</label>
+          <div className="flex gap-2">
+            <input
+              autoFocus
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="teammate@example.com"
+              className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+            />
+            <button
+              type="submit"
+              disabled={adding || !newEmail.trim()}
+              className="px-4 py-1.5 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] disabled:opacity-60 transition-colors"
+            >
+              {adding ? "Adding…" : "Add"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowAdd(false); setNewEmail(""); setAddError(""); }}
+              className="p-1.5 text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {addError && <p className="text-xs text-red-500">{addError}</p>}
+          <p className="text-xs text-gray-400">
+            The person must already have an account. They&apos;ll see this project the next time their list refreshes.
+          </p>
+        </form>
+      )}
+
+      {/* Members list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-8 text-gray-400">
+          <Loader2 className="w-5 h-5 animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-600">{error}</div>
+      ) : (
+        <ul className="divide-y divide-gray-100 border rounded-xl overflow-hidden">
+          {members.map((m) => {
+            const isOwner = m.role === "owner";
+            const isSelf  = m.user_id === currentUserId;
+            const canRemove = !isOwner && !isSelf;
+            return (
+              <li key={m.user_id} className="flex items-center gap-3 px-4 py-3 bg-white">
+                <div className="w-8 h-8 rounded-full bg-[#1F4E78]/10 flex items-center justify-center text-xs font-bold text-[#1F4E78] uppercase flex-shrink-0">
+                  {m.email.charAt(0)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate flex items-center gap-1.5">
+                    {m.email}
+                    {isOwner && (
+                      <span title="Owner" className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                        <Crown className="w-3 h-3" /> Owner
+                      </span>
+                    )}
+                    {isSelf && <span className="text-[10px] text-gray-400">(you)</span>}
+                  </p>
+                  <p className="text-xs text-gray-400">Joined {formatDate(m.created_at)}</p>
+                </div>
+                {canRemove && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(m)}
+                    disabled={removingId === m.user_id}
+                    title="Remove member"
+                    className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    {removingId === m.user_id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}

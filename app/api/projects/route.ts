@@ -12,30 +12,49 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const SELECT = "project_id, project_name, user_id, team_id";
+  type Proj = { project_id: string; project_name: string; user_id: string | null; team_id: string | null };
+
+  // 1. Personal projects owned directly by this user.
   const { data: personal } = await supabase
     .from("projects")
-    .select("project_id, project_name, user_id, team_id")
+    .select(SELECT)
     .eq("user_id", user.id)
     .is("team_id", null);
 
+  // 2. Team projects (existing team-based sharing model).
   const { data: teamMemberships } = await supabase
     .from("team_members")
     .select("team_id")
     .eq("user_id", user.id);
 
-  let teamProjects: unknown[] = [];
-  const teamIds = (teamMemberships ?? []).map(
-    (m: { team_id: string }) => m.team_id
-  );
+  let teamProjects: Proj[] = [];
+  const teamIds = (teamMemberships ?? []).map((m: { team_id: string }) => m.team_id);
   if (teamIds.length > 0) {
-    const { data } = await supabase
-      .from("projects")
-      .select("project_id, project_name, user_id, team_id")
-      .in("team_id", teamIds);
-    teamProjects = data ?? [];
+    const { data } = await supabase.from("projects").select(SELECT).in("team_id", teamIds);
+    teamProjects = (data as Proj[]) ?? [];
   }
 
-  return NextResponse.json([...(personal ?? []), ...teamProjects]);
+  // 3. Projects shared with this user via project_members (per-project sharing).
+  const { data: memberRows } = await supabase
+    .from("project_members")
+    .select("project_id")
+    .eq("user_id", user.id);
+
+  let sharedProjects: Proj[] = [];
+  const memberProjectIds = (memberRows ?? []).map((m: { project_id: string }) => m.project_id);
+  if (memberProjectIds.length > 0) {
+    const { data } = await supabase.from("projects").select(SELECT).in("project_id", memberProjectIds);
+    sharedProjects = (data as Proj[]) ?? [];
+  }
+
+  // Merge all three sources, de-duplicating by project_id.
+  const byId = new Map<string, Proj>();
+  for (const p of [...((personal ?? []) as Proj[]), ...teamProjects, ...sharedProjects]) {
+    byId.set(p.project_id, p);
+  }
+
+  return NextResponse.json([...byId.values()]);
 }
 
 export async function POST(request: Request) {
@@ -65,6 +84,16 @@ export async function POST(request: Request) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Give the creator an 'owner' membership row so per-project sharing works.
+  // Best-effort: if the project_members table isn't migrated yet, the project
+  // is still created (the owner can access it via the personal-project query).
+  const { error: memberErr } = await supabase
+    .from("project_members")
+    .insert({ project_id: data.project_id, user_id: user.id, role: "owner" });
+  if (memberErr) {
+    console.error("[/api/projects] failed to write owner membership:", memberErr.message);
   }
 
   return NextResponse.json(data, { status: 201 });

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, FolderOpen, Plus } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, Plus, Users, X } from "lucide-react";
 import { useProject, type Project } from "@/lib/context/ProjectContext";
+import { TeamMembersList } from "@/components/TeamMembersList";
 
 export function ProjectSelector() {
   const {
@@ -18,6 +19,7 @@ export function ProjectSelector() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState("");
+  const [showTeam, setShowTeam] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -101,6 +103,15 @@ export function ProjectSelector() {
           </div>
 
           <div className="border-t">
+            {activeProjectId && !showNew && (
+              <button
+                onClick={() => { setShowTeam(true); setOpen(false); }}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-600 font-medium hover:bg-gray-50 transition-colors border-b"
+              >
+                <Users className="w-4 h-4" />
+                Manage Team
+              </button>
+            )}
             {!showNew ? (
               <button
                 onClick={() => setShowNew(true)}
@@ -142,6 +153,35 @@ export function ProjectSelector() {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Manage Team modal */}
+      {showTeam && activeProjectId && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowTeam(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-5 py-4 border-b">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">Manage Team</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{activeProjectName}</p>
+              </div>
+              <button
+                onClick={() => setShowTeam(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5">
+              <TeamMembersList projectId={activeProjectId} />
+            </div>
           </div>
         </div>
       )}
