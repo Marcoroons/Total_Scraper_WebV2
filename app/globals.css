@@ -61,8 +61,14 @@
     font-family: var(--font-outfit, "Outfit"), sans-serif;
   }
 
+  :root { color-scheme: dark; }
+
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+
+  /* Tint native date/select arrows to match dark theme */
+  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.6); }
+  select option { background: #0d1829; color: #dde4f4; }
 }

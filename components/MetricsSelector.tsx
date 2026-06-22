@@ -27,6 +27,7 @@ interface MetricsSelectorProps {
   calcSelected: string[];
   onRawChange: (v: string[]) => void;
   onCalcChange: (v: string[]) => void;
+  accentColor?: string;
 }
 
 function toggle(list: string[], val: string) {
@@ -38,15 +39,17 @@ function ChipGroup({
   options,
   selected,
   onChange,
+  accentColor,
 }: {
   label: string;
   options: string[];
   selected: string[];
   onChange: (v: string[]) => void;
+  accentColor: string;
 }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">{label}</p>
+      <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
           const active = selected.includes(opt);
@@ -56,11 +59,12 @@ function ChipGroup({
               type="button"
               title={TOOLTIPS[opt]}
               onClick={() => onChange(toggle(selected, opt))}
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+              className="px-3 py-1 rounded-full text-xs font-medium border transition-all"
+              style={
                 active
-                  ? "bg-[#1F4E78] text-white border-[#1F4E78]"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-[#1F4E78] hover:text-[#1F4E78]"
-              }`}
+                  ? { background: `${accentColor}18`, borderColor: accentColor, color: accentColor }
+                  : { background: "var(--card)", borderColor: "rgba(255,255,255,0.07)", color: "#8899b0" }
+              }
             >
               {opt}
             </button>
@@ -77,6 +81,7 @@ export function MetricsSelector({
   calcSelected,
   onRawChange,
   onCalcChange,
+  accentColor = "#00c9ff",
 }: MetricsSelectorProps) {
   const rawOpts  = RAW_METRICS[platform];
   const calcOpts = CALC_METRICS[platform];
@@ -90,12 +95,14 @@ export function MetricsSelector({
         options={rawOpts}
         selected={validRaw}
         onChange={onRawChange}
+        accentColor={accentColor}
       />
       <ChipGroup
         label="Calculated Metrics"
         options={calcOpts}
         selected={validCalc}
         onChange={onCalcChange}
+        accentColor={accentColor}
       />
     </div>
   );

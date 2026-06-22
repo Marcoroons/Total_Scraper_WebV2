@@ -10,6 +10,8 @@ import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
 type Platform = "Instagram" | "TikTok";
 
+const ACCENT = "#f472b6";
+
 export default function CommentsPage() {
   const { activeProjectId, activeProjectName } = useProject();
   const { createJobs } = useJobs(null);
@@ -36,9 +38,7 @@ export default function CommentsPage() {
       const missingUrl = filledRows.filter((r) => r.kol.trim() && !r.url.trim());
       if (missingKol.length > 0) {
         errs.push(
-          `KOL Username missing for: ${missingKol
-            .map((r) => r.url.slice(0, 45))
-            .join(", ")}`
+          `KOL Username missing for: ${missingKol.map((r) => r.url.slice(0, 45)).join(", ")}`
         );
       }
       if (missingUrl.length > 0) {
@@ -82,8 +82,8 @@ export default function CommentsPage() {
   return (
     <div className="max-w-3xl">
       <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Comments</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
+        <h1 className="text-xl font-bold text-foreground">Comments</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           Scrape comments for NLP sentiment analysis.
           {activeProjectName && <span> · {activeProjectName}</span>}
         </p>
@@ -91,25 +91,25 @@ export default function CommentsPage() {
 
       <div className="space-y-6">
         {/* Platform */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">Platform</h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
           <PlatformToggle value={platform} onChange={(p) => setPlatform(p as Platform)} />
         </div>
 
         {/* Video URL + KOL table */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
             Videos to scrape
-            <span className="ml-1.5 text-gray-400 font-normal text-xs">
+            <span className="ml-1.5 normal-case tracking-normal font-normal text-muted-foreground">
               paste lines as URL[tab]KOL or URL,KOL to fill both columns at once
             </span>
-          </h2>
+          </p>
           <VideoURLTable rows={rows} onChange={setRows} />
         </div>
 
         {/* Max comments */}
-        <div className="bg-white border rounded-xl p-5 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-700">Max comments per post</h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-2">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Max comments per post</p>
           <div className="flex items-center gap-3">
             <input
               type="number"
@@ -117,28 +117,28 @@ export default function CommentsPage() {
               max={5000}
               value={maxComments}
               onChange={(e) =>
-                setMaxComments(
-                  Math.min(5000, Math.max(1, Number(e.target.value) || 1))
-                )
+                setMaxComments(Math.min(5000, Math.max(1, Number(e.target.value) || 1)))
               }
-              className="w-28 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+              className="w-28 px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
-            <span className="text-xs text-gray-400">1 to 5,000</span>
+            <span className="text-xs text-muted-foreground">1 to 5,000</span>
           </div>
-          <p className="text-xs text-amber-600">
+          <p className="text-xs" style={{ color: "#f59e0b" }}>
             More comments = more Apify credits consumed per post.
           </p>
         </div>
 
         {/* NLP disclaimer */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <p className="text-sm text-blue-700">
+        <div
+          className="rounded-xl p-4"
+          style={{ background: "rgba(0,201,255,0.06)", border: "1px solid rgba(0,201,255,0.15)" }}
+        >
+          <p className="text-sm" style={{ color: "#00c9ff" }}>
             NLP analysis settings should be configured before exporting results.{" "}
             <Link href="/nlp-settings" className="font-semibold underline">
               Visit NLP Settings
             </Link>
-            . Scraping and analysis are separate steps — comments are stored raw here
-            and analysed at export time.
+            . Scraping and analysis are separate steps — comments are stored raw here and analysed at export time.
           </p>
         </div>
 
@@ -147,9 +147,12 @@ export default function CommentsPage() {
 
         {/* Errors */}
         {errors.length > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-1">
+          <div
+            className="rounded-xl p-4 space-y-1"
+            style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
+          >
             {errors.map((e, i) => (
-              <p key={i} className="text-sm text-red-600">
+              <p key={i} className="text-sm" style={{ color: "#ef4444" }}>
                 ⚠️ {e}
               </p>
             ))}
@@ -158,12 +161,14 @@ export default function CommentsPage() {
 
         {/* Success */}
         {successCount !== null && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-            <p className="text-sm text-green-700">
-              ✅ {successCount} comment scrape{successCount !== 1 ? "s" : ""} queued
-              successfully. Track progress in{" "}
+          <div
+            className="rounded-xl p-4"
+            style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}
+          >
+            <p className="text-sm" style={{ color: "#10b981" }}>
+              ✅ {successCount} comment scrape{successCount !== 1 ? "s" : ""} queued.{" "}
               <a href="/queue" className="font-semibold underline">
-                Queue
+                Track in Queue
               </a>
               .
             </p>
@@ -176,12 +181,13 @@ export default function CommentsPage() {
             type="button"
             onClick={handleQueue}
             disabled={queuing || !activeProjectId}
-            className="px-6 py-2.5 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] transition-colors disabled:opacity-50"
+            className="px-6 py-2.5 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+            style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT}aa)`, color: "#060c18" }}
           >
             {queuing ? "Queuing..." : "Queue Comment Scrape"}
           </button>
           {!activeProjectId && (
-            <p className="text-sm text-gray-400">Select a project first.</p>
+            <p className="text-sm text-muted-foreground">Select a project first.</p>
           )}
         </div>
       </div>

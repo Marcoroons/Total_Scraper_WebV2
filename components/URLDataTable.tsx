@@ -23,6 +23,9 @@ function update(rows: URLRow[], id: string, patch: Partial<URLRow>): URLRow[] {
   return rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
 }
 
+const inputCls =
+  "w-full px-2.5 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
+
 export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps) {
   function handleUrlPaste(e: React.ClipboardEvent<HTMLInputElement>, rowId: string) {
     const text = e.clipboardData.getData("text");
@@ -53,10 +56,10 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
   }
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className="border border-border rounded-lg overflow-hidden">
       {/* Header */}
       <div
-        className={`grid text-xs font-semibold uppercase tracking-wider text-gray-400 bg-gray-50 border-b px-3 py-2 gap-2 ${
+        className={`grid text-[10px] font-mono uppercase tracking-wider text-muted-foreground bg-muted border-b border-border px-3 py-2 gap-2 ${
           includeRate ? "grid-cols-[1fr_160px_96px_32px]" : "grid-cols-[1fr_160px_32px]"
         }`}
       >
@@ -67,7 +70,7 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
       </div>
 
       {/* Rows */}
-      <div className="divide-y">
+      <div className="divide-y divide-border">
         {rows.map((row) => (
           <div
             key={row.id}
@@ -81,14 +84,14 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
               onChange={(e) => onChange(update(rows, row.id, { url: e.target.value }))}
               onPaste={(e) => handleUrlPaste(e, row.id)}
               placeholder="https://www.instagram.com/p/…"
-              className="w-full px-2.5 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+              className={inputCls}
             />
             <input
               type="text"
               value={row.kol}
               onChange={(e) => onChange(update(rows, row.id, { kol: e.target.value }))}
               placeholder="@handle"
-              className="w-full px-2.5 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+              className={inputCls}
             />
             {includeRate && (
               <input
@@ -98,13 +101,13 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
                 value={row.rate}
                 onChange={(e) => onChange(update(rows, row.id, { rate: e.target.value }))}
                 placeholder="0.00"
-                className="w-full px-2.5 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+                className={inputCls}
               />
             )}
             <button
               type="button"
               onClick={() => removeRow(row.id)}
-              className="p-1.5 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+              className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
               title="Remove row"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -114,11 +117,11 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
       </div>
 
       {/* Add row */}
-      <div className="border-t bg-gray-50">
+      <div className="border-t border-border bg-muted">
         <button
           type="button"
           onClick={addRow}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm text-[#1F4E78] font-medium hover:bg-blue-50 transition-colors w-full"
+          className="flex items-center gap-1.5 px-4 py-2 text-sm text-primary font-medium hover:bg-primary/10 transition-colors w-full"
         >
           <Plus className="w-4 h-4" />
           Add URL

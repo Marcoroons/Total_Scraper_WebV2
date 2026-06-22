@@ -24,7 +24,6 @@ const STATUSES = [
   { value: "FAILED", label: "Failed" },
 ];
 
-// Only job types that have a working export endpoint on the export-service
 const EXPORT_ENDPOINTS: Record<string, string> = {
   "Specific URLs (Video Stats)": "export/video-stats",
   "Profile Feed (Audit)":        "export/profile-audit",
@@ -54,6 +53,9 @@ function formatDate(iso: string) {
     minute: "2-digit",
   });
 }
+
+const selectCls =
+  "px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
 export default function QueuePage() {
   const { activeProjectId, activeProjectName } = useProject();
@@ -128,14 +130,14 @@ export default function QueuePage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Job Queue</h1>
+          <h1 className="text-xl font-bold text-foreground">Job Queue</h1>
           {activeProjectName && (
-            <p className="text-sm text-gray-500 mt-0.5">{activeProjectName}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">{activeProjectName}</p>
           )}
         </div>
         <button
           onClick={refetch}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 bg-white border rounded-lg hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
         >
           <RefreshCw className="w-3.5 h-3.5" />
           Refresh
@@ -147,7 +149,7 @@ export default function QueuePage() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+          className={selectCls}
         >
           <option value="">All Statuses</option>
           {STATUSES.map((s) => (
@@ -160,7 +162,7 @@ export default function QueuePage() {
         <select
           value={jobTypeFilter}
           onChange={(e) => setJobTypeFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+          className={selectCls}
         >
           <option value="">All Job Types</option>
           {JOB_TYPES.map((t) => (
@@ -172,7 +174,7 @@ export default function QueuePage() {
 
         <button
           onClick={() => setSort((s) => (s === "desc" ? "asc" : "desc"))}
-          className="px-3 py-1.5 text-sm border rounded-lg bg-white hover:bg-gray-50 transition-colors"
+          className="px-3 py-1.5 text-sm text-muted-foreground border border-border rounded-lg bg-card hover:bg-muted transition-colors"
         >
           {sort === "desc" ? "↓ Newest First" : "↑ Oldest First"}
         </button>
@@ -180,56 +182,59 @@ export default function QueuePage() {
 
       {/* Content */}
       {!activeProjectId ? (
-        <div className="bg-white border rounded-xl p-12 text-center text-sm text-gray-400">
+        <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           Select a project to view its job queue.
         </div>
       ) : error ? (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-600">
+        <div
+          className="rounded-xl p-4 text-sm"
+          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+        >
           {error}
         </div>
       ) : isLoading ? (
-        <div className="bg-white border rounded-xl p-12 text-center text-sm text-gray-400">
+        <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           Loading jobs…
         </div>
       ) : jobs.length === 0 ? (
-        <div className="bg-white border rounded-xl p-12 text-center text-sm text-gray-400">
+        <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           No jobs found for the current filters.
         </div>
       ) : (
-        <div className="bg-white border rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b bg-gray-50 text-left">
-                <th className="px-4 py-3 font-medium text-gray-600">Target</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Platform</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Job Type</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Status</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Created</th>
-                <th className="px-4 py-3 font-medium text-gray-600">Actions</th>
+              <tr className="border-b border-border bg-muted text-left">
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Target</th>
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</th>
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Job Type</th>
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Status</th>
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Created</th>
+                <th className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border">
               {jobs.map((job) => {
                 const canExport = job.status === "COMPLETED" && job.job_type in EXPORT_ENDPOINTS;
                 const isExporting = exportingJobId === job.job_id;
                 return (
-                  <tr key={job.job_id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={job.job_id} className="hover:bg-muted/50 transition-colors">
                     <td className="px-4 py-3 max-w-[200px]">
-                      <p className="truncate font-medium text-gray-800" title={job.target_url}>
+                      <p className="truncate font-medium text-foreground" title={job.target_url}>
                         {job.kol_username || job.target_url}
                       </p>
                       {job.kol_username && (
-                        <p className="text-xs text-gray-400 truncate">{job.target_url}</p>
+                        <p className="text-xs text-muted-foreground truncate">{job.target_url}</p>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{job.platform}</td>
-                    <td className="px-4 py-3 text-gray-600 max-w-[160px]">
+                    <td className="px-4 py-3 text-muted-foreground">{job.platform}</td>
+                    <td className="px-4 py-3 text-muted-foreground max-w-[160px]">
                       <span className="truncate block" title={job.job_type}>{job.job_type}</span>
                     </td>
                     <td className="px-4 py-3">
                       <JobStatusBadge status={job.status} errorMessage={job.error_message} />
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                    <td className="px-4 py-3 text-muted-foreground text-xs whitespace-nowrap">
                       {formatDate(job.created_at)}
                     </td>
                     <td className="px-4 py-3">
@@ -238,7 +243,7 @@ export default function QueuePage() {
                           <button
                             onClick={() => handleCancel(job)}
                             title="Cancel job"
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            className="p-1.5 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                           >
                             <XCircle className="w-4 h-4" />
                           </button>
@@ -247,7 +252,7 @@ export default function QueuePage() {
                           <button
                             onClick={() => handleRetry(job)}
                             title="Retry job"
-                            className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors"
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
@@ -257,7 +262,7 @@ export default function QueuePage() {
                             onClick={() => handleExport(job)}
                             disabled={isExporting}
                             title={isExporting ? "Generating…" : "Download Excel"}
-                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-wait"
+                            className="p-1.5 text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-wait"
                           >
                             {isExporting ? (
                               <RefreshCw className="w-4 h-4 animate-spin" />
@@ -273,8 +278,8 @@ export default function QueuePage() {
               })}
             </tbody>
           </table>
-          <div className="px-4 py-2.5 border-t bg-gray-50 text-xs text-gray-400 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
+          <div className="px-4 py-2.5 border-t border-border bg-muted text-xs text-muted-foreground flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#10b981" }} />
             {jobs.length} job{jobs.length !== 1 ? "s" : ""} · Realtime updates active
           </div>
         </div>

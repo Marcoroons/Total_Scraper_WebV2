@@ -10,6 +10,8 @@ import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
 type Platform = "Instagram" | "TikTok";
 
+const ACCENT = "#a78bfa";
+
 const FORMAT_OPTIONS = ["Reels Only", "All Formats", "Images/Carousel Only"] as const;
 const SORT_OPTIONS   = ["Most Recent", "Oldest", "Most Views", "Least Views"] as const;
 
@@ -29,6 +31,9 @@ function extractHandle(raw: string, platform: Platform): string {
   for (const p of parts) if (p.startsWith("@")) return p.slice(1);
   return parts[parts.length - 1] ?? "";
 }
+
+const inputCls =
+  "px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
 
 function ProfileTable({
   rows,
@@ -69,13 +74,13 @@ function ProfileTable({
             placeholder="https://www.instagram.com/username/ or @handle"
             onChange={(e) => update(i, e.target.value)}
             onPaste={(e) => handlePaste(i, e)}
-            className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+            className={`flex-1 ${inputCls}`}
           />
           <button
             type="button"
             onClick={() => remove(i)}
             disabled={rows.length === 1}
-            className="p-1.5 text-gray-300 hover:text-red-400 disabled:opacity-20 transition-colors"
+            className="p-1.5 text-muted-foreground hover:text-red-400 disabled:opacity-20 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -84,7 +89,7 @@ function ProfileTable({
       <button
         type="button"
         onClick={() => onChange([...rows, ""])}
-        className="flex items-center gap-1.5 text-xs text-[#1F4E78] hover:text-[#2E86AB] transition-colors"
+        className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80 transition-opacity"
       >
         <Plus className="w-3.5 h-3.5" />
         Add row
@@ -186,8 +191,8 @@ export default function ProfileTrackerPage() {
   return (
     <div className="max-w-3xl">
       <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Profile Tracker</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
+        <h1 className="text-xl font-bold text-foreground">Profile Tracker</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
           Scrape a creator&apos;s profile feed for audit.
           {activeProjectName && <span> · {activeProjectName}</span>}
         </p>
@@ -195,8 +200,8 @@ export default function ProfileTrackerPage() {
 
       <div className="space-y-6">
         {/* Platform */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">Platform</h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
           <PlatformToggle
             value={platform}
             onChange={(p) => {
@@ -210,28 +215,29 @@ export default function ProfileTrackerPage() {
 
         {/* Format (Instagram only) */}
         {!isTikTok && (
-          <div className="bg-white border rounded-xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700">
-              Content type <span className="text-red-500">*</span>
-            </h2>
+          <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              Content type <span className="text-red-400">*</span>
+            </p>
             <div className="flex flex-wrap gap-2">
               {FORMAT_OPTIONS.map((opt) => (
                 <button
                   key={opt}
                   type="button"
                   onClick={() => setFormat(opt)}
-                  className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+                  className="px-3 py-1.5 text-sm rounded-lg border transition-all"
+                  style={
                     format === opt
-                      ? "bg-[#1F4E78] text-white border-[#1F4E78]"
-                      : "bg-white text-gray-600 border-gray-200 hover:border-[#1F4E78]"
-                  }`}
+                      ? { background: `${ACCENT}18`, borderColor: ACCENT, color: ACCENT }
+                      : { background: "var(--card)", borderColor: "rgba(255,255,255,0.07)", color: "#8899b0" }
+                  }
                 >
                   {opt}
                 </button>
               ))}
             </div>
             {format === "Reels Only" && (
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-muted-foreground">
                 Uses the dedicated Apify Reel Scraper — chronological, excludes pinned. Cheaper and more accurate than scraping all posts.
               </p>
             )}
@@ -239,38 +245,40 @@ export default function ProfileTrackerPage() {
         )}
 
         {/* Posts per profile */}
-        <div className="bg-white border rounded-xl p-5 space-y-2">
-          <h2 className="text-sm font-semibold text-gray-700">Posts per profile</h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-2">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Posts per profile</p>
           <input
             type="number"
             min={1}
             max={200}
             value={postLimit}
             onChange={(e) => setPostLimit(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
-            className="w-28 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+            className={`w-28 ${inputCls}`}
           />
         </div>
 
         {/* Date range */}
-        <div className="bg-white border rounded-xl p-5 space-y-4">
+        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
           <div>
-            <h2 className="text-sm font-semibold text-gray-700">Date range <span className="font-normal text-gray-400">(optional)</span></h2>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              Date range <span className="normal-case tracking-normal font-normal">(optional)</span>
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
               Instagram fetches forward from a start date — end-date filtering happens on our side and may cost a few extra Apify credits.
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <p className="text-xs font-medium text-gray-600">Start</p>
+              <p className="text-xs font-medium text-muted-foreground">Start</p>
               <div className="flex flex-col gap-1">
                 {(["all", "specific"] as const).map((m) => (
-                  <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label key={m} className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
                     <input
                       type="radio"
                       checked={startMode === m}
                       onChange={() => { setStartMode(m); if (m === "all") setDateFrom(""); }}
-                      className="accent-[#1F4E78]"
+                      className="accent-primary"
                     />
                     {m === "all" ? "From the start (no known date)" : "Specific date"}
                   </label>
@@ -281,21 +289,21 @@ export default function ProfileTrackerPage() {
                   type="date"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+                  className={inputCls}
                 />
               )}
             </div>
 
             <div className="space-y-2">
-              <p className="text-xs font-medium text-gray-600">End</p>
+              <p className="text-xs font-medium text-muted-foreground">End</p>
               <div className="flex flex-col gap-1">
                 {(["now", "specific"] as const).map((m) => (
-                  <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label key={m} className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
                     <input
                       type="radio"
                       checked={endMode === m}
                       onChange={() => { setEndMode(m); if (m === "now") setDateTo(""); }}
-                      className="accent-[#1F4E78]"
+                      className="accent-primary"
                     />
                     {m === "now" ? "Latest (now)" : "Specific date"}
                   </label>
@@ -306,59 +314,60 @@ export default function ProfileTrackerPage() {
                   type="date"
                   value={dateTo}
                   onChange={(e) => setDateTo(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+                  className={inputCls}
                 />
               )}
             </div>
           </div>
 
           {dateInvalid && (
-            <p className="text-xs text-red-500">Start date is after end date.</p>
+            <p className="text-xs" style={{ color: "#ef4444" }}>Start date is after end date.</p>
           )}
           {!dateInvalid && (dateFrom || dateTo) && (
-            <p className="text-xs text-blue-600">
+            <p className="text-xs text-primary">
               Range: {dateFrom || "start"} → {dateTo || "now"}
             </p>
           )}
         </div>
 
         {/* Sort order */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">
-            Sort videos by in export <span className="text-red-500">*</span>
-          </h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+            Sort videos by in export <span className="text-red-400">*</span>
+          </p>
           <div className="flex flex-wrap gap-2">
             {SORT_OPTIONS.map((opt) => (
               <button
                 key={opt}
                 type="button"
                 onClick={() => setSortBy(opt)}
-                className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+                className="px-3 py-1.5 text-sm rounded-lg border transition-all"
+                style={
                   sortBy === opt
-                    ? "bg-[#1F4E78] text-white border-[#1F4E78]"
-                    : "bg-white text-gray-600 border-gray-200 hover:border-[#1F4E78]"
-                }`}
+                    ? { background: `${ACCENT}18`, borderColor: ACCENT, color: ACCENT }
+                    : { background: "var(--card)", borderColor: "rgba(255,255,255,0.07)", color: "#8899b0" }
+                }
               >
                 {opt}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-6 pt-1">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
               <input
                 type="checkbox"
                 checked={top5}
                 onChange={(e) => setTop5(e.target.checked)}
-                className="accent-[#1F4E78]"
+                className="accent-primary"
               />
               Include Top 5 links + avg
             </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <label className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
               <input
                 type="checkbox"
                 checked={bot5}
                 onChange={(e) => setBot5(e.target.checked)}
-                className="accent-[#1F4E78]"
+                className="accent-primary"
               />
               Include Bottom 5 links + avg
             </label>
@@ -366,27 +375,28 @@ export default function ProfileTrackerPage() {
         </div>
 
         {/* Metrics */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">
-            Metrics to include in export <span className="text-red-500">*</span>
-          </h2>
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+            Metrics to include in export <span className="text-red-400">*</span>
+          </p>
           <MetricsSelector
             platform={platform}
             rawSelected={rawMetrics}
             calcSelected={calcMetrics}
             onRawChange={setRawMetrics}
             onCalcChange={setCalcMetrics}
+            accentColor={ACCENT}
           />
         </div>
 
         {/* Profiles */}
-        <div className="bg-white border rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">
+        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
             Profiles to scrape
-            <span className="ml-1.5 text-gray-400 font-normal text-xs">
+            <span className="ml-1.5 normal-case tracking-normal font-normal text-muted-foreground">
               paste multiple lines to fill all at once
             </span>
-          </h2>
+          </p>
           <ProfileTable rows={profiles} onChange={setProfiles} />
         </div>
 
@@ -395,19 +405,25 @@ export default function ProfileTrackerPage() {
 
         {/* Errors */}
         {errors.length > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-1">
+          <div
+            className="rounded-xl p-4 space-y-1"
+            style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
+          >
             {errors.map((e, i) => (
-              <p key={i} className="text-sm text-red-600">⚠️ {e}</p>
+              <p key={i} className="text-sm" style={{ color: "#ef4444" }}>⚠️ {e}</p>
             ))}
           </div>
         )}
 
         {/* Success */}
         {successCount !== null && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-            <p className="text-sm text-green-700">
-              ✅ {successCount} profile audit{successCount !== 1 ? "s" : ""} queued. Track progress in{" "}
-              <a href="/queue" className="font-semibold underline">Queue</a>.
+          <div
+            className="rounded-xl p-4"
+            style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}
+          >
+            <p className="text-sm" style={{ color: "#10b981" }}>
+              ✅ {successCount} profile audit{successCount !== 1 ? "s" : ""} queued.{" "}
+              <a href="/queue" className="font-semibold underline">Track in Queue</a>.
             </p>
           </div>
         )}
@@ -418,12 +434,13 @@ export default function ProfileTrackerPage() {
             type="button"
             onClick={handleQueue}
             disabled={queuing || !activeProjectId}
-            className="px-6 py-2.5 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] transition-colors disabled:opacity-50"
+            className="px-6 py-2.5 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+            style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT}aa)`, color: "#060c18" }}
           >
             {queuing ? "Queuing..." : "Queue Profile Audit"}
           </button>
           {!activeProjectId && (
-            <p className="text-sm text-gray-400">Select a project first.</p>
+            <p className="text-sm text-muted-foreground">Select a project first.</p>
           )}
         </div>
       </div>

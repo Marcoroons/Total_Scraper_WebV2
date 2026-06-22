@@ -15,6 +15,9 @@ interface Props {
   onChange: (rows: VideoRow[]) => void;
 }
 
+const inputCls =
+  "w-full px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
+
 export function VideoURLTable({ rows, onChange }: Props) {
   function update(id: string, field: keyof Omit<VideoRow, "id">, value: string) {
     onChange(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
@@ -62,10 +65,10 @@ export function VideoURLTable({ rows, onChange }: Props) {
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-[1fr_180px_32px] gap-2 px-1">
-        <span className="text-xs font-medium text-gray-500">
+        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
           Video URL <span className="text-red-400">*</span>
         </span>
-        <span className="text-xs font-medium text-gray-500">
+        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
           KOL Username <span className="text-red-400">*</span>
         </span>
         <span />
@@ -79,22 +82,22 @@ export function VideoURLTable({ rows, onChange }: Props) {
             onChange={(e) => update(row.id, "url", e.target.value)}
             onPaste={(e) => handlePaste(e, row.id)}
             placeholder="https://www.instagram.com/reel/..."
-            className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+            className={inputCls}
           />
           <input
             type="text"
             value={row.kol}
             onChange={(e) => update(row.id, "kol", e.target.value)}
             placeholder="@username"
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] focus:border-transparent"
+            className="px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
           <button
             type="button"
             onClick={() => deleteRow(row.id)}
             aria-label="Remove row"
-            className="flex items-center justify-center w-8 h-8 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors text-lg leading-none"
+            className="flex items-center justify-center w-8 h-8 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
           >
-            x
+            ×
           </button>
         </div>
       ))}
@@ -102,7 +105,7 @@ export function VideoURLTable({ rows, onChange }: Props) {
       <button
         type="button"
         onClick={() => onChange([...rows, newVideoRow()])}
-        className="mt-1 text-xs text-[#1F4E78] hover:underline"
+        className="mt-1 text-xs text-primary hover:opacity-80 transition-opacity"
       >
         + Add row
       </button>

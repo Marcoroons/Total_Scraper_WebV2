@@ -50,6 +50,8 @@ const DEFAULT_PR = [
   },
 ];
 
+const ACCENT = "#f472b6";
+
 // ─── Simple editable table component ─────────────────────────────────────────
 type RowData = Record<string, string>;
 
@@ -81,12 +83,12 @@ function EditableTable({
     <div className="overflow-x-auto">
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="border-b bg-gray-50">
+          <tr className="border-b border-border bg-muted">
             {columns.map((col) => (
-              <th key={col} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              <th key={col} className="px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
                 {col}
                 {columnHelp?.[col] && (
-                  <span className="ml-1 text-gray-400 font-normal normal-case tracking-normal">
+                  <span className="ml-1 font-normal normal-case tracking-normal text-muted-foreground opacity-70">
                     — {columnHelp[col]}
                   </span>
                 )}
@@ -95,16 +97,16 @@ function EditableTable({
             <th className="w-8" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-border">
           {rows.map((row, rowIdx) => (
-            <tr key={rowIdx} className="hover:bg-gray-50">
+            <tr key={rowIdx} className="hover:bg-muted/50">
               {columns.map((col) => (
                 <td key={col} className="px-2 py-1">
                   <input
                     type="text"
                     value={row[col] ?? ""}
                     onChange={(e) => update(rowIdx, col, e.target.value)}
-                    className="w-full px-2 py-1 text-sm border border-transparent hover:border-gray-200 focus:border-[#1F4E78] rounded focus:outline-none focus:ring-1 focus:ring-[#1F4E78]"
+                    className="w-full px-2 py-1 text-sm rounded bg-transparent border border-transparent hover:border-border focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring text-foreground placeholder:text-muted-foreground"
                   />
                 </td>
               ))}
@@ -112,7 +114,7 @@ function EditableTable({
                 <button
                   type="button"
                   onClick={() => remove(rowIdx)}
-                  className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                  className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -124,7 +126,7 @@ function EditableTable({
       <button
         type="button"
         onClick={addRow}
-        className="mt-2 flex items-center gap-1.5 text-xs text-[#1F4E78] hover:text-[#2E86AB] transition-colors"
+        className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:opacity-80 transition-opacity"
       >
         <Plus className="w-3.5 h-3.5" />
         Add row
@@ -133,11 +135,13 @@ function EditableTable({
   );
 }
 
+const textareaCls =
+  "w-full px-3 py-2 text-xs rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono";
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function NlpSettingsPage() {
   const { activeProjectId, activeProjectName } = useProject();
 
-  // Text-area fields
   const [productKw,   setProductKw]   = useState(BASE_PRODUCT);
   const [influencerKw,setInfluencerKw]= useState(BASE_INFLUENCER);
   const [intentKw,    setIntentKw]    = useState(BASE_INTENT);
@@ -151,12 +155,10 @@ export default function NlpSettingsPage() {
   const [reactionKw,  setReactionKw]  = useState(BASE_REACTION);
   const [brandHandle, setBrandHandle] = useState("cimory");
 
-  // Editable table rows
   const [prRows,    setPrRows]    = useState<RowData[]>(DEFAULT_PR);
   const [themeRows, setThemeRows] = useState<RowData[]>(DEFAULT_THEMES);
   const [slangRows, setSlangRows] = useState<RowData[]>(DEFAULT_SLANG);
 
-  // UI state
   const [loading,  setLoading]  = useState(false);
   const [saving,   setSaving]   = useState(false);
   const [saveMsg,  setSaveMsg]  = useState<{ ok: boolean; text: string } | null>(null);
@@ -182,10 +184,8 @@ export default function NlpSettingsPage() {
       if (config.reaction_words)      setReactionKw(String(config.reaction_words));
       if (config.brand_handle)        setBrandHandle(String(config.brand_handle));
 
-      // Editable tables
       const rawPr = config.pr_alerts;
       if (Array.isArray(rawPr) && rawPr.length > 0) {
-        // Normalise both old (name/phrases/keywords/triggers) and new column-name shapes
         setPrRows((rawPr as Record<string, unknown>[]).map((a) => ({
           "Alert Name":    String(a["Alert Name"] ?? a.name ?? ""),
           "Exact Phrases": String(a["Exact Phrases"] ?? a.phrases ?? ""),
@@ -267,67 +267,82 @@ export default function NlpSettingsPage() {
   if (!activeProjectId) {
     return (
       <div className="max-w-5xl">
-        <h1 className="text-xl font-bold text-gray-900 mb-4">NLP Settings</h1>
-        <div className="bg-white border rounded-xl p-12 text-center text-sm text-gray-400">
+        <h1 className="text-xl font-bold text-foreground mb-4">NLP Settings</h1>
+        <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           Select a project to configure its NLP settings.
         </div>
       </div>
     );
   }
 
+  const SaveButton = ({ className = "" }: { className?: string }) => (
+    <button
+      type="button"
+      onClick={handleSave}
+      disabled={saving || loading}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 ${className}`}
+      style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT}aa)`, color: "#060c18" }}
+    >
+      <Save className="w-4 h-4" />
+      {saving ? "Saving…" : "Save Configuration"}
+    </button>
+  );
+
   return (
     <div className="max-w-5xl">
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">NLP Settings</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="text-xl font-bold text-foreground">NLP Settings</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
             Project NLP configuration{activeProjectName && <span> · {activeProjectName}</span>}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving || loading}
-          className="flex items-center gap-2 px-4 py-2 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] transition-colors disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Saving…" : "Save Configuration"}
-        </button>
+        <SaveButton />
       </div>
 
       {saveMsg && (
-        <div className={`mb-6 border rounded-xl p-4 text-sm ${saveMsg.ok ? "bg-green-50 border-green-200 text-green-700" : "bg-red-50 border-red-200 text-red-600"}`}>
+        <div
+          className="mb-6 rounded-xl p-4 text-sm"
+          style={
+            saveMsg.ok
+              ? { background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981" }
+              : { background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }
+          }
+        >
           {saveMsg.ok ? "✅ " : "⚠️ "}{saveMsg.text}
         </div>
       )}
 
       {loading ? (
-        <div className="bg-white border rounded-xl p-12 text-center text-sm text-gray-400">
+        <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           Loading configuration…
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Caption */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
+          {/* Info banner */}
+          <div
+            className="rounded-xl p-4 text-sm"
+            style={{ background: "rgba(0,201,255,0.06)", border: "1px solid rgba(0,201,255,0.15)", color: "#00c9ff" }}
+          >
             These dictionaries are pre-filled with the full base vocabulary. You can <strong>add extra words</strong> — the engine always uses BASE + your additions. Clearing a field reverts it to the base on the next save.
           </div>
 
           {/* Brand handle */}
-          <div className="bg-white border rounded-xl p-5 space-y-2">
-            <h2 className="text-sm font-semibold text-gray-700">Brand Handle</h2>
+          <div className="bg-card border border-border rounded-xl p-5 space-y-2">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Brand Handle</p>
             <input
               type="text"
               value={brandHandle}
               onChange={(e) => setBrandHandle(e.target.value)}
               placeholder="cimory"
-              className="w-48 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78]"
+              className="w-48 px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
-            <p className="text-xs text-gray-400">Without @ — used to detect brand tag mentions in comments.</p>
+            <p className="text-xs text-muted-foreground">Without @ — used to detect brand tag mentions in comments.</p>
           </div>
 
           {/* 3-column keyword text areas */}
-          <div className="bg-white border rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Keyword Dictionaries</h2>
+          <div className="bg-card border border-border rounded-xl p-5">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-4">Keyword Dictionaries</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* Column A */}
               <div className="space-y-4">
@@ -338,13 +353,13 @@ export default function NlpSettingsPage() {
                   { label: "Health Keywords",     val: healthKw,     set: setHealthKw,     help: "" },
                 ].map(({ label, val, set, help }) => (
                   <div key={label} className="space-y-1">
-                    <label className="block text-xs font-semibold text-gray-600">{label}</label>
-                    {help && <p className="text-xs text-gray-400">{help}</p>}
+                    <label className="block text-xs font-semibold text-muted-foreground">{label}</label>
+                    {help && <p className="text-xs text-muted-foreground opacity-70">{help}</p>}
                     <textarea
                       value={val}
                       onChange={(e) => set(e.target.value)}
                       rows={5}
-                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] resize-y font-mono"
+                      className={textareaCls}
                     />
                   </div>
                 ))}
@@ -359,13 +374,13 @@ export default function NlpSettingsPage() {
                   { label: "Spam Phrases",            val: spamKw,     set: setSpamKw,     help: "" },
                 ].map(({ label, val, set, help }) => (
                   <div key={label} className="space-y-1">
-                    <label className="block text-xs font-semibold text-gray-600">{label}</label>
-                    {help && <p className="text-xs text-gray-400">{help}</p>}
+                    <label className="block text-xs font-semibold text-muted-foreground">{label}</label>
+                    {help && <p className="text-xs text-muted-foreground opacity-70">{help}</p>}
                     <textarea
                       value={val}
                       onChange={(e) => set(e.target.value)}
                       rows={5}
-                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] resize-y font-mono"
+                      className={textareaCls}
                     />
                   </div>
                 ))}
@@ -379,13 +394,13 @@ export default function NlpSettingsPage() {
                   { label: "Reaction Words",  val: reactionKw, set: setReactionKw, help: "" },
                 ].map(({ label, val, set, help }) => (
                   <div key={label} className="space-y-1">
-                    <label className="block text-xs font-semibold text-gray-600">{label}</label>
-                    {help && <p className="text-xs text-gray-400">{help}</p>}
+                    <label className="block text-xs font-semibold text-muted-foreground">{label}</label>
+                    {help && <p className="text-xs text-muted-foreground opacity-70">{help}</p>}
                     <textarea
                       value={val}
                       onChange={(e) => set(e.target.value)}
                       rows={4}
-                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1F4E78] resize-y font-mono"
+                      className={textareaCls}
                     />
                   </div>
                 ))}
@@ -394,10 +409,10 @@ export default function NlpSettingsPage() {
           </div>
 
           {/* PR Crisis tracking table */}
-          <div className="bg-white border rounded-xl p-5 space-y-3">
+          <div className="bg-card border border-border rounded-xl p-5 space-y-3">
             <div>
-              <h2 className="text-sm font-semibold text-gray-700">PR Crisis Tracking</h2>
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">PR Crisis Tracking</p>
+              <p className="text-xs text-muted-foreground mt-1">
                 An alert fires if any <strong>Exact Phrase</strong> appears, OR if a <strong>Keyword</strong> AND a <strong>Trigger</strong> both appear together in the same comment. Add one row per alert.
               </p>
             </div>
@@ -415,10 +430,10 @@ export default function NlpSettingsPage() {
 
           {/* Theme + Slang tables side by side */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="bg-white border rounded-xl p-5 space-y-3">
+            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">Theme Map</h2>
-                <p className="text-xs text-gray-400 mt-1">Theme → keyword triggers (comma-separated).</p>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Theme Map</p>
+                <p className="text-xs text-muted-foreground mt-1">Theme → keyword triggers (comma-separated).</p>
               </div>
               <EditableTable
                 columns={["Theme", "Keywords"]}
@@ -426,10 +441,10 @@ export default function NlpSettingsPage() {
                 onChange={setThemeRows}
               />
             </div>
-            <div className="bg-white border rounded-xl p-5 space-y-3">
+            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">Slang / Typo Map</h2>
-                <p className="text-xs text-gray-400 mt-1">Slang or typos → canonical form.</p>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Slang / Typo Map</p>
+                <p className="text-xs text-muted-foreground mt-1">Slang or typos → canonical form.</p>
               </div>
               <EditableTable
                 columns={["Original", "Replacement"]}
@@ -441,15 +456,7 @@ export default function NlpSettingsPage() {
 
           {/* Bottom save button */}
           <div className="flex items-center gap-3 pb-4">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || loading}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[#1F4E78] text-white text-sm font-semibold rounded-lg hover:bg-[#2E86AB] transition-colors disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              {saving ? "Saving…" : "Save Configuration"}
-            </button>
+            <SaveButton className="px-6 py-2.5" />
           </div>
         </div>
       )}
