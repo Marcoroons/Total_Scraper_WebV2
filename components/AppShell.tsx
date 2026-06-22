@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useProject } from "@/lib/context/ProjectContext";
+import { AppTour } from "@/components/AppTour";
 
 /* ── Nav structure matching Figma exactly ── */
 type NavItem = { href: string; label: string; icon: React.ElementType; color: string };
@@ -153,6 +154,7 @@ export function AppShell({ email, children }: { email: string; children: React.R
         <div
           className="flex items-center justify-between px-3 py-3.5 flex-shrink-0"
           style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+          data-tour="logo"
         >
           <div className="flex items-center gap-2 min-w-0">
             <div
@@ -341,6 +343,7 @@ export function AppShell({ email, children }: { email: string; children: React.R
 
           <div className="flex items-center gap-1.5">
             <button
+              onClick={() => window.dispatchEvent(new Event("ts:start-tour"))}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-mono border transition-all hover:border-[rgba(0,201,255,0.3)] hover:text-[#00c9ff]"
               style={{ borderColor: "rgba(255,255,255,0.07)", color: "#5a7294" }}
               data-tour="tour-trigger"
@@ -372,6 +375,9 @@ export function AppShell({ email, children }: { email: string; children: React.R
           {children}
         </main>
       </div>
+
+      {/* ── Onboarding tour (portal, renders above everything) ── */}
+      <AppTour />
     </div>
   );
 }
