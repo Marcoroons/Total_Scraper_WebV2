@@ -79,7 +79,7 @@ export async function GET() {
     byId.set(p.project_id, p);
   }
 
-  return NextResponse.json([...byId.values()]);
+  return NextResponse.json(Array.from(byId.values()));
 }
 
 export async function POST(request: Request) {
