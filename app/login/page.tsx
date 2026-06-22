@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Database, Shield, Zap, Globe } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -16,27 +16,49 @@ const inputCls =
   "w-full px-3 py-2.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
 
 export default function LoginPage() {
-  const router       = useRouter();
-  const searchParams = useSearchParams();
-  const justCreated  = searchParams.get("created") === "1";
+  const router = useRouter();
+  const [justCreated, setJustCreated] = useState(false);
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("created") === "1") {
+      setJustCreated(true);
+    }
+  }, []);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    setLoading(true);
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    if (!url.startsWith("https://")) {
+      setError("App is not configured: Supabase credentials are missing or invalid. Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY.");
       return;
     }
-    router.push("/queue");
-    router.refresh();
+
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      if (authError) {
+        const msg = authError.message ?? "";
+        if (/failed to fetch|network|fetch/i.test(msg)) {
+          setError("Could not reach the authentication server. Check your connection and Supabase URL.");
+        } else {
+          setError(msg || "Sign in failed.");
+        }
+        return;
+      }
+      router.push("/dashboard");
+      router.refresh();
+    } catch {
+      setError("Network error — could not reach the authentication server.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

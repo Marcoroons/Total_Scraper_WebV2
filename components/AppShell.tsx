@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Hash,
   HelpCircle,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -26,6 +27,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { useProject } from "@/lib/context/ProjectContext";
 import { AppTour } from "@/components/AppTour";
+import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 
 /* ── Nav structure matching Figma exactly ── */
 type NavItem = { href: string; label: string; icon: React.ElementType; color: string };
@@ -100,6 +102,7 @@ export function AppShell({ email, children }: { email: string; children: React.R
   const { activeProjectName } = useProject();
   const [collapsed,  setCollapsed]  = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   const pageTitle    = getTitle(pathname);
   const userInitials = initials(email);
@@ -309,6 +312,13 @@ export function AppShell({ email, children }: { email: string; children: React.R
                 <div className="text-[10px] truncate" style={{ color: "#5a7294" }}>{email}</div>
               </div>
               <button
+                onClick={() => setShowChangePassword(true)}
+                title="Change password"
+                className="opacity-30 hover:opacity-80 transition-opacity flex-shrink-0"
+              >
+                <KeyRound className="w-3.5 h-3.5" style={{ color: "#94a3b8" }} />
+              </button>
+              <button
                 onClick={handleSignOut}
                 title="Sign out"
                 className="opacity-30 hover:opacity-80 transition-opacity flex-shrink-0"
@@ -378,6 +388,11 @@ export function AppShell({ email, children }: { email: string; children: React.R
 
       {/* ── Onboarding tour (portal, renders above everything) ── */}
       <AppTour />
+
+      {/* ── Change password modal ── */}
+      {showChangePassword && (
+        <ChangePasswordModal onClose={() => setShowChangePassword(false)} />
+      )}
     </div>
   );
 }

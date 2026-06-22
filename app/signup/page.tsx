@@ -16,34 +16,50 @@ const inputCls =
 
 export default function SignupPage() {
   const router = useRouter();
-  const [email,       setEmail]       = useState("");
-  const [password,    setPassword]    = useState("");
-  const [inviteCode,  setInviteCode]  = useState("");
-  const [error,       setError]       = useState("");
-  const [loading,     setLoading]     = useState(false);
+  const [email,           setEmail]           = useState("");
+  const [password,        setPassword]        = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [inviteCode,      setInviteCode]      = useState("");
+  const [error,           setError]           = useState("");
+  const [loading,         setLoading]         = useState(false);
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
+
+  const passwordsMismatch =
+    confirmPassword.length > 0 && password !== confirmPassword;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, inviteCode }),
+        body: JSON.stringify({ email, password, confirmPassword, inviteCode }),
       });
 
-      const data = await res.json();
+      // Read as text first so a non-JSON (HTML 500) response doesn't throw.
+      const raw = await res.text();
+      let data: { error?: string; requiresConfirmation?: boolean; signInFailed?: boolean } = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch { /* non-JSON response */ }
 
       if (!res.ok) {
-        setError(data.error ?? "Signup failed. Please try again.");
+        setError(data.error ?? `Signup failed (HTTP ${res.status}). Please try again.`);
         return;
       }
 
       if (data.signInFailed) {
-        // Account created but auto sign-in failed — send to login
         router.push("/login?created=1");
         return;
       }
@@ -55,7 +71,7 @@ export default function SignupPage() {
         router.refresh();
       }
     } catch {
-      setError("Network error. Check your connection and try again.");
+      setError("Network error — could not reach the server. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -195,6 +211,26 @@ export default function SignupPage() {
               </div>
               <div>
                 <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Confirm Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className={inputCls}
+                  placeholder="Re-enter your password"
+                  style={passwordsMismatch ? { borderColor: "rgba(239,68,68,0.5)" } : undefined}
+                />
+                {passwordsMismatch && (
+                  <p className="text-[11px] mt-1.5" style={{ color: "#ef4444" }}>
+                    Passwords don&apos;t match.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
                   Invite Code
                 </label>
                 <input
@@ -218,7 +254,7 @@ export default function SignupPage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || passwordsMismatch}
                 className="w-full py-2.5 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-60 mt-2"
                 style={{ background: "linear-gradient(135deg, #00c9ff, #0087d8)", color: "#060c18" }}
               >

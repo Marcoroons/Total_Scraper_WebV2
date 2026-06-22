@@ -18,25 +18,31 @@ const STEPS: Step[] = [
   {
     target:    "logo",
     title:     "Welcome to Total Scraper Web",
-    body:      "Your command centre for Instagram & TikTok data intelligence. Click the logo anytime to return home.",
+    body:      "Your command centre for Instagram & TikTok data intelligence. Here's a 60-second tour of what each tool does — click the logo anytime to return home.",
     placement: "right",
   },
   {
-    target:    "nav",
-    title:     "Your scraper toolkit",
-    body:      "Six precision tools — video stats, profile audits, comment sentiment, hashtag trends, competitor analysis, and more. Pick one and start collecting.",
+    target:    "video-url-scraper",
+    title:     "URL Tracking — Video URL Scraper",
+    body:      "Paste a batch of Instagram or TikTok video URLs and pull hard engagement metrics for each one — views, likes, comments, shares — plus captions and audio data. Use this when you already know the exact posts you want to measure.",
     placement: "right",
   },
   {
-    target:    "queue-&-export",
-    title:     "Queue & Export",
-    body:      "Every job you run lands here. Track progress in real time, retry failures, download Excel exports, and build competitor reports.",
+    target:    "profile-scraper",
+    title:     "Profile Tracking — Profile Scraper",
+    body:      "Audit any creator or brand account: follower count, posting frequency, average engagement, and their recent feed. Great for benchmarking competitors or building an influencer shortlist before a campaign.",
     placement: "right",
   },
   {
-    target:    "nlp-settings",
-    title:     "NLP Settings",
-    body:      "Tune the keyword lists and prompt templates that power sentiment analysis. Your changes apply to all future comment scrapes.",
+    target:    "comment-sentiment",
+    title:     "Comment Sentiment Analysis",
+    body:      "Scrape the comments under any post and run NLP sentiment analysis — it classifies tone, flags emotion, and surfaces what your audience actually feels about a piece of content. You can fine-tune the model under NLP Settings.",
+    placement: "right",
+  },
+  {
+    target:    "teams",
+    title:     "Teams & Projects",
+    body:      "Organise everything into Projects and share them with your Team. Each scrape is scoped to the active project, so invited teammates can pick up exactly where you left off — manage members and roles from the Teams tab.",
     placement: "right",
   },
 ];
@@ -99,13 +105,20 @@ export function AppTour() {
 
   const completeTour = useCallback(async () => {
     setActive(false);
-    if (userId.current) {
+    const id = userId.current;
+    if (!id) return;
+    // Local guard first — guarantees the tour never repeats on this browser
+    // even if the Supabase write below fails (e.g. column not migrated yet).
+    try { localStorage.setItem(`ts:tour-seen:${id}`, "1"); } catch { /* ignore */ }
+    try {
       const sb = createClient();
-      await sb.from("profiles").update({ has_completed_tour: true }).eq("id", userId.current);
-    }
+      await sb.from("profiles").update({ has_completed_tour: true }).eq("id", id);
+    } catch { /* best-effort */ }
   }, []);
 
-  // Check tour status after mount
+  // Check tour status after mount — auto-start ONLY on a brand-new user's first
+  // ever session (profile row exists with the flag still false, and the tour
+  // hasn't already been seen on this browser).
   useEffect(() => {
     if (!mounted) return;
     (async () => {
@@ -114,13 +127,17 @@ export function AppTour() {
       if (!user) return;
       userId.current = user.id;
 
+      try {
+        if (localStorage.getItem(`ts:tour-seen:${user.id}`)) return;
+      } catch { /* ignore */ }
+
       const { data: profile } = await sb
         .from("profiles")
         .select("has_completed_tour")
         .eq("id", user.id)
         .maybeSingle();
 
-      if (profile && !profile.has_completed_tour) {
+      if (profile && profile.has_completed_tour === false) {
         setStep(0);
         setActive(true);
       }

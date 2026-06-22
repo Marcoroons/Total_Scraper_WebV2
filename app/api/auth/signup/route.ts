@@ -2,100 +2,124 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServerClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 
+/** A value is "real" if it's set and isn't one of the repo placeholder strings. */
+function isConfigured(v: string | undefined): v is string {
+  return !!v && v.trim().length > 0 && !v.trim().toLowerCase().startsWith("your-");
+}
+
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null);
-  if (!body) {
-    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
-  }
+  // Top-level guard: this route must ALWAYS return JSON, never an HTML 500,
+  // otherwise the client's res.json() throws and surfaces "Network error".
+  try {
+    const url     = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  const { email, password, inviteCode } = body as {
-    email?: string;
-    password?: string;
-    inviteCode?: string;
-  };
+    if (!isConfigured(url) || !isConfigured(anonKey)) {
+      return NextResponse.json(
+        { error: "Server is not configured: Supabase credentials are missing. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY." },
+        { status: 500 }
+      );
+    }
 
-  if (!email?.trim() || !password) {
-    return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
-  }
+    const body = await request.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+    }
 
-  // Invite code — only enforced when the env var is actually configured.
-  // If INVITE_CODE is not set we treat signup as open (dev / first-run).
-  const expected = process.env.INVITE_CODE?.trim();
-  if (expected && inviteCode?.trim() !== expected) {
-    return NextResponse.json({ error: "Incorrect invite code." }, { status: 403 });
-  }
+    const { email, password, confirmPassword, inviteCode } = body as {
+      email?: string;
+      password?: string;
+      confirmPassword?: string;
+      inviteCode?: string;
+    };
 
-  const cleanEmail = email.trim().toLowerCase();
+    if (!email?.trim() || !password) {
+      return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
+    }
+    if (password.length < 6) {
+      return NextResponse.json({ error: "Password must be at least 6 characters." }, { status: 400 });
+    }
+    // Defense in depth — the UI also checks this, but never trust the client.
+    if (confirmPassword !== undefined && password !== confirmPassword) {
+      return NextResponse.json({ error: "Passwords do not match." }, { status: 400 });
+    }
 
-  // ── Fast path: admin client with service-role key (no email confirmation) ──
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (serviceKey) {
-    const admin = createAdminClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    // Invite code — only enforced when the env var is actually configured.
+    const expected = process.env.INVITE_CODE;
+    if (isConfigured(expected) && inviteCode?.trim() !== expected.trim()) {
+      return NextResponse.json({ error: "Incorrect invite code." }, { status: 403 });
+    }
 
-    const { data: created, error: createErr } = await admin.auth.admin.createUser({
-      email: cleanEmail,
-      password,
-      email_confirm: true, // skip confirmation email entirely
-    });
+    const cleanEmail = email.trim().toLowerCase();
 
-    if (createErr) {
-      // Surface a friendlier duplicate-account message
-      const msg = createErr.message ?? "";
-      if (msg.toLowerCase().includes("already") || msg.toLowerCase().includes("exists")) {
+    // ── Fast path: service-role admin client (instant, no confirmation email) ──
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (isConfigured(serviceKey)) {
+      const admin = createAdminClient(url, serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+
+      const { data: created, error: createErr } = await admin.auth.admin.createUser({
+        email: cleanEmail,
+        password,
+        email_confirm: true,
+      });
+
+      if (createErr) {
+        const msg = (createErr.message ?? "").toLowerCase();
+        if (msg.includes("already") || msg.includes("exists") || msg.includes("registered")) {
+          return NextResponse.json(
+            { error: "An account with this email already exists. Try signing in instead." },
+            { status: 409 }
+          );
+        }
+        return NextResponse.json({ error: createErr.message || "Failed to create account." }, { status: 400 });
+      }
+
+      // Best-effort profile row so the onboarding flag exists from the start.
+      if (created.user) {
+        await admin
+          .from("profiles")
+          .upsert(
+            { id: created.user.id, email: cleanEmail, has_completed_tour: false },
+            { onConflict: "id", ignoreDuplicates: true }
+          )
+          .then(undefined, () => { /* table may not be migrated yet — ignore */ });
+      }
+
+      // Sign in immediately so the browser receives a session cookie.
+      const supabase = await createServerClient();
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+      if (signInErr) {
+        return NextResponse.json({ requiresConfirmation: false, signInFailed: true });
+      }
+      return NextResponse.json({ requiresConfirmation: false });
+    }
+
+    // ── Fallback: standard signUp (sends a confirmation email) ──
+    const supabase = await createServerClient();
+    const { data, error } = await supabase.auth.signUp({ email: cleanEmail, password });
+
+    if (error) {
+      const msg = (error.message ?? "").toLowerCase();
+      if (msg.includes("already") || msg.includes("exists") || msg.includes("registered")) {
         return NextResponse.json(
           { error: "An account with this email already exists. Try signing in instead." },
           { status: 409 }
         );
       }
-      return NextResponse.json({ error: msg || "Failed to create account." }, { status: 400 });
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    // Ensure the profiles row exists (trigger may not be configured yet)
-    if (created.user) {
-      await admin.from("profiles").upsert(
-        { id: created.user.id, email: cleanEmail, has_completed_tour: false },
-        { onConflict: "id", ignoreDuplicates: true }
-      );
-    }
-
-    // Sign the user in immediately so the client gets a session
-    const supabase = await createServerClient();
-    const { error: signInErr } = await supabase.auth.signInWithPassword({
-      email: cleanEmail,
-      password,
-    });
-    if (signInErr) {
-      // User was created but sign-in failed — ask them to sign in manually
-      return NextResponse.json({ requiresConfirmation: false, signInFailed: true });
-    }
-
-    return NextResponse.json({ requiresConfirmation: false });
+    return NextResponse.json({ requiresConfirmation: !data.session });
+  } catch (err) {
+    console.error("[/api/auth/signup] unexpected error:", err);
+    return NextResponse.json(
+      { error: "Unexpected server error during signup. Please try again." },
+      { status: 500 }
+    );
   }
-
-  // ── Fallback: standard signUp (requires email confirmation) ──
-  const supabase = await createServerClient();
-  const { data, error } = await supabase.auth.signUp({
-    email: cleanEmail,
-    password,
-    options: {
-      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? ""}/auth/callback`,
-    },
-  });
-
-  if (error) {
-    const msg = error.message ?? "";
-    if (msg.toLowerCase().includes("already") || msg.toLowerCase().includes("exists")) {
-      return NextResponse.json(
-        { error: "An account with this email already exists. Try signing in instead." },
-        { status: 409 }
-      );
-    }
-    return NextResponse.json({ error: msg }, { status: 400 });
-  }
-
-  return NextResponse.json({ requiresConfirmation: !data.session });
 }
