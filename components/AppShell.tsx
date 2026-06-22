@@ -30,7 +30,7 @@ import { AppTour } from "@/components/AppTour";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 
 /* ── Nav structure matching Figma exactly ── */
-type NavItem = { href: string; label: string; icon: React.ElementType; color: string };
+type NavItem = { href: string; label: string; icon: React.ElementType; color: string; soon?: boolean };
 type NavSection = { label?: string; items: NavItem[] };
 
 const NAV: NavSection[] = [
@@ -45,8 +45,8 @@ const NAV: NavSection[] = [
       { href: "/url-stats",       label: "Video URL Scraper",   icon: Video,         color: "#f59e0b" },
       { href: "/profile-tracker", label: "Profile Scraper",     icon: User,          color: "#a78bfa" },
       { href: "/comments",        label: "Comment Sentiment",   icon: MessageSquare, color: "#f472b6" },
-      { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf" },
-      { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c" },
+      { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf", soon: true },
+      { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c", soon: true },
     ],
   },
   {
@@ -242,7 +242,7 @@ export function AppShell({ email, children }: { email: string; children: React.R
 
               {/* Items */}
               <div className="space-y-[1px]">
-                {section.items.map(({ href, label, icon: Icon, color }) => {
+                {section.items.map(({ href, label, icon: Icon, color, soon }) => {
                   const isActive = href === "/dashboard"
                     ? pathname === "/dashboard" || pathname === "/"
                     : pathname.startsWith(href) && label !== "Report Builder";
@@ -275,6 +275,14 @@ export function AppShell({ email, children }: { email: string; children: React.R
                         <Icon className="w-3.5 h-3.5" />
                       </div>
                       {!collapsed && <span>{label}</span>}
+                      {!collapsed && soon && (
+                        <span
+                          className="ml-auto text-[8px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: "rgba(255,255,255,0.05)", color: "#5a7294", border: "1px solid rgba(255,255,255,0.08)" }}
+                        >
+                          soon
+                        </span>
+                      )}
                     </Link>
                   );
                 })}

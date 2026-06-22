@@ -1,7 +1,13 @@
+import { Hash } from "lucide-react";
+import { ComingSoon } from "@/components/ComingSoon";
+
 export default function HashtagsPage() {
   return (
-    <div className="p-2">
-      <h1 className="text-2xl font-bold text-foreground">Hashtags</h1>
-    </div>
+    <ComingSoon
+      title="Hashtag / Trend Analysis"
+      description="Track content volume, discover rising hashtags, and benchmark performance over time — landing in a future release."
+      icon={Hash}
+      accent="#2dd4bf"
+    />
   );
 }

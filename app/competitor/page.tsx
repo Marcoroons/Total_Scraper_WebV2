@@ -1,7 +1,13 @@
+import { TrendingUp } from "lucide-react";
+import { ComingSoon } from "@/components/ComingSoon";
+
 export default function CompetitorPage() {
   return (
-    <div className="p-2">
-      <h1 className="text-2xl font-bold text-foreground">Competitor Intel</h1>
-    </div>
+    <ComingSoon
+      title="Competitor Analysis"
+      description="Side-by-side benchmarking of brand presence, posting cadence, and audience engagement across accounts is on the way."
+      icon={TrendingUp}
+      accent="#fb923c"
+    />
   );
 }
