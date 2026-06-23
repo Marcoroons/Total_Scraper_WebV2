@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Bell,
-  Brain,
+  BookOpen,
   ChevronLeft,
   Clock,
   Database,
@@ -58,7 +58,7 @@ const NAV: NavSection[] = [
   {
     label: "TOOLS",
     items: [
-      { href: "/nlp-settings", label: "NLP Settings", icon: Brain, color: "#f472b6" },
+      { href: "/handbook", label: "Handbook", icon: BookOpen, color: "#00c9ff" },
     ],
   },
   {
@@ -78,7 +78,7 @@ const TITLES: Record<string, string> = {
   "/hashtags":        "Hashtag / Trend Analysis",
   "/queue":           "Queue & Export",
   "/competitor":      "Competitor Analysis",
-  "/nlp-settings":    "NLP Settings",
+  "/handbook":        "Handbook",
   "/teams":           "Teams",
   "/projects":        "Projects",
 };

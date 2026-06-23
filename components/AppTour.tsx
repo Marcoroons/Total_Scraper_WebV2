@@ -36,7 +36,7 @@ const STEPS: Step[] = [
   {
     target:    "comment-sentiment",
     title:     "Comment Sentiment Analysis",
-    body:      "Scrape the comments under any post and run NLP sentiment analysis — it classifies tone, flags emotion, and surfaces what your audience actually feels about a piece of content. You can fine-tune the model under NLP Settings.",
+    body:      "Scrape the comments under any post and run NLP sentiment analysis — it classifies tone, flags emotion, and surfaces what your audience feels. Tune the sentiment dictionaries in the NLP Settings tab inside this page. Full how-to lives in the Handbook.",
     placement: "right",
   },
   {
@@ -103,22 +103,25 @@ export function AppTour() {
   // Hydration guard — portals need the DOM
   useEffect(() => { setMounted(true); }, []);
 
-  const completeTour = useCallback(async () => {
-    setActive(false);
+  // Persist "seen" — localStorage (per-browser) + profiles flag (per-account).
+  const markSeen = useCallback(async () => {
     const id = userId.current;
     if (!id) return;
-    // Local guard first — guarantees the tour never repeats on this browser
-    // even if the Supabase write below fails (e.g. column not migrated yet).
     try { localStorage.setItem(`ts:tour-seen:${id}`, "1"); } catch { /* ignore */ }
     try {
       const sb = createClient();
       await sb.from("profiles").update({ has_completed_tour: true }).eq("id", id);
-    } catch { /* best-effort */ }
+    } catch { /* best-effort — column may not be migrated yet */ }
   }, []);
 
-  // Check tour status after mount — auto-start ONLY on a brand-new user's first
-  // ever session (profile row exists with the flag still false, and the tour
-  // hasn't already been seen on this browser).
+  const completeTour = useCallback(() => {
+    setActive(false);
+    markSeen();
+  }, [markSeen]);
+
+  // Auto-start ONLY ONCE, for a brand-new user's first session. We mark it seen
+  // the instant it opens, so a refresh mid-tour can't re-trigger it. Repeat users
+  // only ever see it again by clicking "Take the tour" in the Handbook.
   useEffect(() => {
     if (!mounted) return;
     (async () => {
@@ -140,9 +143,10 @@ export function AppTour() {
       if (profile && profile.has_completed_tour === false) {
         setStep(0);
         setActive(true);
+        markSeen();   // persist immediately — never auto-shows again
       }
     })();
-  }, [mounted]);
+  }, [mounted, markSeen]);
 
   // Listen for manual re-trigger (Tour button in header)
   useEffect(() => {
