@@ -31,10 +31,23 @@ export const DEFAULT_METRICS = [
   "Average Likes",  "Average Comments", "Content Categories",
 ];
 
-export function buildExportPayload(job: Job, endpoint: string) {
+export interface ExportOptions {
+  sortBy?: string;       // "Most Recent" | "Oldest" | "Most Views" | "Least Views"
+  inclTop5?: boolean;
+  inclBot5?: boolean;
+}
+
+const DEFAULT_OPTS: Required<ExportOptions> = {
+  sortBy: "Most Recent",
+  inclTop5: true,
+  inclBot5: false,
+};
+
+export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptions = {}) {
+  const o = { ...DEFAULT_OPTS, ...opts };
   const base = { project_id: job.project_id, platform: job.platform, endpoint };
   if (endpoint === "export/profile-audit") {
-    return { ...base, usernames: [job.kol_username].filter(Boolean), sort_by: "Most Views", incl_top5: true, incl_bot5: false };
+    return { ...base, usernames: [job.kol_username].filter(Boolean), sort_by: o.sortBy, incl_top5: o.inclTop5, incl_bot5: o.inclBot5 };
   }
   return { ...base, video_urls: [job.target_url] };
 }
@@ -43,17 +56,21 @@ export function buildExportPayload(job: Job, endpoint: string) {
  * Combine many jobs of the SAME endpoint + platform into one export call, so the
  * Railway service returns a single workbook containing all of them. The export
  * endpoints already accept arrays (usernames / video_urls).
+ *
+ * `jobs` should already be ordered as the user wants them to appear in the file
+ * (the export service preserves the usernames array order).
  */
-export function buildBatchExportPayload(jobs: Job[], endpoint: string) {
+export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: ExportOptions = {}) {
+  const o = { ...DEFAULT_OPTS, ...opts };
   const first = jobs[0];
   const base = { project_id: first.project_id, platform: first.platform, endpoint };
   if (endpoint === "export/profile-audit") {
     return {
       ...base,
       usernames: jobs.map((j) => j.kol_username).filter(Boolean),
-      sort_by: "Most Views",
-      incl_top5: true,
-      incl_bot5: false,
+      sort_by: o.sortBy,
+      incl_top5: o.inclTop5,
+      incl_bot5: o.inclBot5,
     };
   }
   return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean) };

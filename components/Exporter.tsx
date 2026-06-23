@@ -66,6 +66,11 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // Export options (profile-audit video ordering)
+  const [sortBy,    setSortBy]    = useState("Most Recent");
+  const [inclTop5,  setInclTop5]  = useState(true);
+  const [inclBot5,  setInclBot5]  = useState(false);
+
   // Export progress
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
   const [rescraping, setRescraping] = useState<string | null>(null);
@@ -172,7 +177,10 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
       const arr = groups.get(key);
       if (arr) arr.push(job); else groups.set(key, [job]);
     }
-    return Array.from(groups.values());
+    // Order each group oldest-first so the export lists KOLs in paste order.
+    return Array.from(groups.values()).map((g) =>
+      [...g].sort((a, b) => a.created_at.localeCompare(b.created_at))
+    );
   }, [exportableSelected]);
 
   // ── Export + download — one compiled file per (type, platform) group ───────
@@ -187,7 +195,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         const res = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildBatchExportPayload(group, endpoint)),
+          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5 })),
         });
         if (!res.ok) { failures++; }
         else {
@@ -373,8 +381,28 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           {/* Direct export */}
           <div className="bg-card border border-border rounded-xl p-5">
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">Export now</p>
+
+            {/* Profile-audit video ordering */}
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Sort videos by</label>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className={`${selectCls} w-full mb-3`}>
+              <option value="Most Recent">Most Recent</option>
+              <option value="Oldest">Oldest</option>
+              <option value="Most Views">Most Views</option>
+              <option value="Least Views">Least Views</option>
+            </select>
+            <div className="flex flex-wrap gap-4 mb-4">
+              <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
+                <input type="checkbox" checked={inclTop5} onChange={(e) => setInclTop5(e.target.checked)} className="accent-primary" />
+                Top 5 avg
+              </label>
+              <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
+                <input type="checkbox" checked={inclBot5} onChange={(e) => setInclBot5(e.target.checked)} className="accent-primary" />
+                Bottom 5 avg
+              </label>
+            </div>
+
             <p className="text-xs text-muted-foreground mb-4">
-              Compiles the selected completed jobs into a single Excel file. The columns reflect whatever was scraped.
+              Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Columns reflect whatever was scraped.
               {exportGroups.length > 1 && " Mixed scrape types or platforms are split into one file each (different column layouts)."}
             </p>
             <button

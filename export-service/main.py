@@ -143,6 +143,16 @@ def export_profile_audit(req: ProfileAuditRequest):
             detail="No profile data found. The job may still be processing.",
         )
     df = pd.DataFrame(rows)
+
+    # Preserve the caller's username order (the paste order) so the export lists
+    # creators in the same sequence they were entered, not Supabase row order.
+    if req.usernames and "username" in df.columns:
+        order = {u.lower(): i for i, u in enumerate(req.usernames)}
+        df["_kol_order"] = (
+            df["username"].astype(str).str.lower().map(order).fillna(len(order)).astype(int)
+        )
+        df = df.sort_values("_kol_order", kind="stable").drop(columns="_kol_order")
+
     buf = generate_profile_audit_excel(
         df,
         is_tiktok=(req.platform == "TikTok"),

@@ -13,7 +13,6 @@ type Platform = "Instagram" | "TikTok";
 const ACCENT = "#a78bfa";
 
 const FORMAT_OPTIONS = ["Reels Only", "All Formats", "Images/Carousel Only"] as const;
-const SORT_OPTIONS   = ["Most Recent", "Oldest", "Most Views", "Least Views"] as const;
 
 function extractHandle(raw: string, platform: Platform): string {
   const s = raw.trim();
@@ -109,9 +108,6 @@ export default function ProfileTrackerPage() {
   const [endMode,     setEndMode]     = useState<"now" | "specific">("now");
   const [dateFrom,    setDateFrom]    = useState("");
   const [dateTo,      setDateTo]      = useState("");
-  const [sortBy,      setSortBy]      = useState<string>("");
-  const [top5,        setTop5]        = useState(false);
-  const [bot5,        setBot5]        = useState(false);
   const [rawMetrics,  setRawMetrics]  = useState<string[]>([]);
   const [calcMetrics, setCalcMetrics] = useState<string[]>([]);
   const [profiles,    setProfiles]    = useState<string[]>([""]);
@@ -130,7 +126,6 @@ export default function ProfileTrackerPage() {
 
     const errs: string[] = [];
     if (!isTikTok && !format) errs.push("Content type not selected (choose Reels Only, All Formats, or Images/Carousel Only).");
-    if (!sortBy) errs.push("Sort order not selected.");
     const filled = profiles.filter((p) => p.trim());
     if (filled.length === 0) errs.push("No profiles entered — add at least one URL or @handle.");
     if (rawMetrics.length === 0 && calcMetrics.length === 0) errs.push("No metrics selected — pick at least one raw or calculated metric.");
@@ -338,50 +333,6 @@ export default function ProfileTrackerPage() {
           )}
         </div>
 
-        {/* Sort order */}
-        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            Sort videos by in export <span className="text-red-400">*</span>
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {SORT_OPTIONS.map((opt) => (
-              <button
-                key={opt}
-                type="button"
-                onClick={() => setSortBy(opt)}
-                className="px-3 py-1.5 text-sm rounded-lg border transition-all"
-                style={
-                  sortBy === opt
-                    ? { background: `${ACCENT}18`, borderColor: ACCENT, color: ACCENT }
-                    : { background: "var(--card)", borderColor: "rgba(255,255,255,0.07)", color: "#8899b0" }
-                }
-              >
-                {opt}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-6 pt-1">
-            <label className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
-              <input
-                type="checkbox"
-                checked={top5}
-                onChange={(e) => setTop5(e.target.checked)}
-                className="accent-primary"
-              />
-              Include Top 5 links + avg
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
-              <input
-                type="checkbox"
-                checked={bot5}
-                onChange={(e) => setBot5(e.target.checked)}
-                className="accent-primary"
-              />
-              Include Bottom 5 links + avg
-            </label>
-          </div>
-        </div>
-
         {/* Metrics */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-3">
           <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
@@ -410,6 +361,50 @@ export default function ProfileTrackerPage() {
 
         {/* Apify key */}
         <ApifyKeyInput value={apifyKey} onChange={setApifyKey} />
+
+        {/* Preview */}
+        {(() => {
+          const previewRows = profiles
+            .map((raw) => ({ raw: raw.trim(), handle: extractHandle(raw, platform) }))
+            .filter((r) => r.raw);
+          if (previewRows.length === 0) return null;
+          const metricCount = rawMetrics.length + calcMetrics.length;
+          return (
+            <div className="bg-card border border-border rounded-xl p-5 space-y-3" style={{ borderColor: `${ACCENT}33` }}>
+              <p className="text-[10px] font-mono uppercase tracking-wider" style={{ color: ACCENT }}>
+                Preview — what will be scraped
+              </p>
+
+              {/* Config summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+                <div><span className="text-muted-foreground">Platform: </span><span className="text-foreground font-medium">{platform}</span></div>
+                {!isTikTok && <div><span className="text-muted-foreground">Content: </span><span className="text-foreground font-medium">{format || "—"}</span></div>}
+                <div><span className="text-muted-foreground">Posts/profile: </span><span className="text-foreground font-medium">{postLimit}</span></div>
+                <div><span className="text-muted-foreground">Date range: </span><span className="text-foreground font-medium">{(startMode === "specific" && dateFrom) || "start"} → {(endMode === "specific" && dateTo) || "now"}</span></div>
+                <div><span className="text-muted-foreground">Metrics: </span><span className="text-foreground font-medium">{metricCount} selected</span></div>
+                <div><span className="text-muted-foreground">Profiles: </span><span className="text-foreground font-medium">{previewRows.length}</span></div>
+              </div>
+
+              {/* Ordered profile list */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Scrape order (preserved into the export):</p>
+                <ol className="rounded-lg border border-border divide-y divide-border max-h-52 overflow-y-auto">
+                  {previewRows.map((r, i) => (
+                    <li key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                      <span className="font-mono w-6 text-right flex-shrink-0" style={{ color: "#5a7294" }}>{i + 1}.</span>
+                      <span className="text-foreground font-medium truncate">{r.handle ? `@${r.handle}` : <span style={{ color: "#ef4444" }}>could not read handle</span>}</span>
+                      <span className="text-muted-foreground truncate ml-auto text-[11px]">{r.raw}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                Video sort order and Top/Bottom 5 are chosen in the <span style={{ color: ACCENT }}>Exporter</span> when you download — so you can re-sort without re-scraping.
+              </p>
+            </div>
+          );
+        })()}
 
         {/* Errors */}
         {errors.length > 0 && (
