@@ -97,5 +97,61 @@ export async function GET(request: NextRequest) {
     prevTotal = count ?? 0;
   }
 
-  return NextResponse.json({ jobs: jobs ?? [], prevTotal });
+  // ── Aggregate real engagement metrics for the scraped content ───────────────
+  // The ig_/tiktok_ data tables are keyed by username (profiles) / video_url
+  // (videos) and share the columns play_count, likes, comments, shares. We pull
+  // the identifiers from this window's COMPLETED jobs, then sum the data tables.
+  const completed = (jobs ?? []).filter((j) => j.status === "COMPLETED");
+  const pfx = (platform: string) => (platform === "Instagram" ? "ig" : "tiktok");
+
+  const profUsers: Record<string, Set<string>> = {};
+  const vidUrls:   Record<string, Set<string>> = {};
+  for (const j of completed) {
+    if (j.job_type === "Profile Feed (Audit)" && j.kol_username) {
+      (profUsers[j.platform] ??= new Set()).add(j.kol_username);
+    } else if (j.job_type === "Specific URLs (Video Stats)" && j.target_url) {
+      (vidUrls[j.platform] ??= new Set()).add(j.target_url);
+    }
+  }
+
+  type Agg = { name: string; platform: string; views: number; likes: number; comments: number; shares: number; posts: number };
+  const perKol = new Map<string, Agg>();
+  const N = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  function accumulate(platform: string, name: string, row: { play_count?: unknown; likes?: unknown; comments?: unknown; shares?: unknown }) {
+    const key = `${platform}__${name}`;
+    const a = perKol.get(key) ?? { name, platform, views: 0, likes: 0, comments: 0, shares: 0, posts: 0 };
+    a.views += N(row.play_count); a.likes += N(row.likes); a.comments += N(row.comments); a.shares += N(row.shares); a.posts += 1;
+    perKol.set(key, a);
+  }
+
+  // Profile audit data (by username)
+  for (const platform of Object.keys(profUsers)) {
+    const usernames = Array.from(profUsers[platform]);
+    if (usernames.length === 0) continue;
+    const { data } = await supabase
+      .from(`${pfx(platform)}_influencer_profiles`)
+      .select("username, play_count, likes, comments, shares")
+      .in("username", usernames);
+    for (const row of data ?? []) accumulate(platform, String(row.username || "(unknown)"), row);
+  }
+  // Video stats data (by video_url, attributed to its username)
+  for (const platform of Object.keys(vidUrls)) {
+    const urls = Array.from(vidUrls[platform]);
+    if (urls.length === 0) continue;
+    const { data } = await supabase
+      .from(`${pfx(platform)}_campaign_videos`)
+      .select("username, video_url, play_count, likes, comments, shares")
+      .in("video_url", urls);
+    for (const row of data ?? []) accumulate(platform, String(row.username || row.video_url || "(unknown)"), row);
+  }
+
+  const kols = Array.from(perKol.values()).sort((a, b) => b.views - a.views);
+  const totals = kols.reduce(
+    (t, k) => ({ views: t.views + k.views, likes: t.likes + k.likes, comments: t.comments + k.comments, shares: t.shares + k.shares, posts: t.posts + k.posts }),
+    { views: 0, likes: 0, comments: 0, shares: 0, posts: 0 }
+  );
+  const viewsByPlatform: Record<string, number> = {};
+  for (const k of kols) viewsByPlatform[k.platform] = (viewsByPlatform[k.platform] ?? 0) + k.views;
+
+  return NextResponse.json({ jobs: jobs ?? [], prevTotal, totals, kols, viewsByPlatform });
 }

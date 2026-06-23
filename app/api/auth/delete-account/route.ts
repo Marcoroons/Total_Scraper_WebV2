@@ -27,15 +27,46 @@ export async function POST() {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // Best-effort cleanup of the user's membership + profile rows so we don't
-    // leave dangling references. Owned projects/teams are intentionally NOT mass
-    // -deleted here (teammates may rely on them) — if a FK blocks the auth delete
-    // we surface that clearly below.
-    await admin.from("project_members").delete().eq("user_id", user.id).then(undefined, () => {});
-    await admin.from("team_members").delete().eq("user_id", user.id).then(undefined, () => {});
-    await admin.from("profiles").delete().eq("id", user.id).then(undefined, () => {});
+    const uid = user.id;
+    // Swallow individual cleanup errors so one missing table doesn't abort the
+    // whole deletion (best-effort).
+    const safe = (q: PromiseLike<unknown>) => Promise.resolve(q).then(() => {}, () => {});
 
-    const { error: delErr } = await admin.auth.admin.deleteUser(user.id);
+    // 1. The user's OWNED, non-team projects.
+    const { data: owned } = await admin
+      .from("projects").select("project_id").eq("user_id", uid).is("team_id", null);
+    const ownedIds = (owned ?? []).map((p: { project_id: string }) => p.project_id);
+
+    // 2. Keep only the ones NOT shared with anyone else — those are truly personal
+    //    and safe to wipe. Projects shared via project_members stay for the others.
+    const personalOnly: string[] = [];
+    for (const pid of ownedIds) {
+      const { data: members } = await admin
+        .from("project_members").select("user_id").eq("project_id", pid);
+      const others = (members ?? []).filter((m: { user_id: string }) => m.user_id !== uid);
+      if (others.length === 0) personalOnly.push(pid);
+    }
+
+    // 3. Wipe personal-only projects + their scraped-job records, schedules, config.
+    //    (The global ig_/tiktok_ data tables are keyed by username/url and shared
+    //     across projects, so they can't be attributed to one user and are left.)
+    if (personalOnly.length > 0) {
+      await safe(admin.from("scrape_jobs").delete().in("project_id", personalOnly));
+      await safe(admin.from("scheduled_reports").delete().in("project_id", personalOnly));
+      await safe(admin.from("nlp_configs").delete().in("project_id", personalOnly));
+      await safe(admin.from("project_members").delete().in("project_id", personalOnly));
+      await safe(admin.from("projects").delete().in("project_id", personalOnly));
+    }
+
+    // 4. Remove the user from everything shared so it remains intact for others.
+    await safe(admin.from("project_members").delete().eq("user_id", uid));
+    await safe(admin.from("team_members").delete().eq("user_id", uid));
+    await safe(admin.from("scheduled_reports").delete().eq("created_by", uid));
+
+    // 5. Profile mirror row, then the auth user itself.
+    await safe(admin.from("profiles").delete().eq("id", uid));
+
+    const { error: delErr } = await admin.auth.admin.deleteUser(uid);
     if (delErr) {
       console.error("[/api/auth/delete-account] deleteUser failed:", delErr.message);
       return NextResponse.json(
