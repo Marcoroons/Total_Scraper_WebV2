@@ -1031,27 +1031,49 @@ def _filter_ig_content(data: list, format_filter: str) -> list:
     return filtered
 
 
-def _date_fetch_limit(limit: int, date_to: str, has_range: bool) -> int:
+def _extract_post_date(item: dict) -> str:
     """
-    How many newest posts to pull from the actor when a date window is set.
-
-    The IG/TikTok actors return newest-first and have NO "before this date"
-    cutoff. So to actually land `limit` posts on/before date_to, we must
-    over-fetch far enough to skip past everything newer than date_to. We scale
-    by how many days back the end date is (~2 posts/day after the cutoff), then
-    add the limit and cap it so a far-back end date doesn't blow the credit budget.
-
-    Examples (limit=20): end date today -> 20; ~2 months back -> ~140; capped 300.
+    Best-effort YYYY-MM-DD for a scraped post, checking the many field names the
+    IG/TikTok actors use (flat + a couple of nested spots). Returns "" if none
+    found — callers KEEP undated posts rather than dropping them.
     """
-    if not has_range:
-        return limit
-    days_back = 0
-    if date_to:
+    FIELDS = (
+        "timestamp", "takenAt", "takenAtTimestamp", "taken_at", "taken_at_timestamp",
+        "postedAt", "postedAtTimestamp", "date", "createTime", "createTimeISO", "create_time",
+    )
+    def _coerce(v) -> str:
+        if v in (None, "", 0): return ""
         try:
-            days_back = max(0, (datetime.date.today() - datetime.date.fromisoformat(str(date_to)[:10])).days)
+            if isinstance(v, (int, float)):
+                ts = float(v)
+                if ts > 1e12: ts /= 1000.0          # milliseconds → seconds
+                return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            s = str(v).strip()
+            return s[:10] if len(s) >= 10 else ""    # "YYYY-MM-DD..." → date part
         except Exception:
-            days_back = 0
-    return min(limit + int(days_back * 2) + 10, 300)
+            return ""
+    for f in FIELDS:
+        d = _coerce(item.get(f))
+        if d: return d
+    # A couple of nested spots some actor versions use
+    for parent in ("node", "videoMeta", "media"):
+        sub = item.get(parent)
+        if isinstance(sub, dict):
+            for f in FIELDS:
+                d = _coerce(sub.get(f))
+                if d: return d
+    return ""
+
+
+def _date_fetch_limit(limit: int, has_range: bool) -> int:
+    """
+    How many newest posts to pull when a date window is set. The actors return
+    newest-first with NO "before this date" cutoff (Apify/Instagram limitation),
+    so we over-fetch a MODERATE amount to give the date filter room without
+    scraping deep history. For an end date far in the past this may under-deliver
+    — that's an inherent Apify limit, raise the cap if you accept the credit cost.
+    """
+    return min(limit * 2 + 10, 80) if has_range else limit
 
 
 def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
@@ -1112,28 +1134,17 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
 
     profile_url = f"https://www.instagram.com/{handle}/"
     has_range = bool(date_from or date_to)
-    fetch_limit = _date_fetch_limit(limit, date_to, has_range)  # over-fetch to reach the date window
-
-    def _post_ts(item) -> str:
-        for field in ("timestamp", "takenAtTimestamp", "taken_at", "postedAt", "date"):
-            v = item.get(field)
-            if v:
-                try:
-                    if isinstance(v, (int, float)):
-                        return datetime.datetime.utcfromtimestamp(v).strftime("%Y-%m-%d")
-                    return str(v)[:10]
-                except Exception:
-                    pass
-        return ""
+    fetch_limit = _date_fetch_limit(limit, has_range)  # over-fetch to reach the date window
 
     def _apply_date_range(items: list) -> list:
         if not has_range:
             return items
         out = []
         for it in items:
-            pd = _post_ts(it)
+            pd = _extract_post_date(it)
             if not pd:
-                continue  # can't verify date — exclude when a range was requested
+                out.append(it)  # undated — keep it (don't drop), just can't date-filter
+                continue
             if date_from and pd < date_from:
                 continue
             if date_to and pd > date_to:
@@ -1145,13 +1156,13 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
         run_input = {
             "username":           [handle],
             "resultsLimit":       fetch_limit,
-            "excludePinnedReels": True,
+            "skipPinnedPosts":    True,
         }
         if date_from:
-            run_input["onlyAfter"] = date_from   # actor-native: don't scrape older than this
+            run_input["onlyPostsNewerThan"] = date_from   # actor-native: don't scrape older than this
         raw = call_apify("apify/instagram-reel-scraper", run_input, apikey)
         print(f"   IG Reels @{handle}: {len(raw)} raw reel(s) "
-              f"(fetch_limit={fetch_limit}{', onlyAfter='+date_from if date_from else ''})")
+              f"(fetch_limit={fetch_limit}{', onlyPostsNewerThan='+date_from if date_from else ''})")
         filtered = _apply_date_range(raw)
         if has_range:
             print(f"   IG Reels @{handle}: {len(filtered)} after date filter "
@@ -1337,37 +1348,34 @@ def process_job(job):
                 chunks = [all_handles[i:i+CHUNK_SIZE] for i in range(0, len(all_handles), CHUNK_SIZE)]
                 raw_data = []
                 # Oversample when filtering by date — some results will fall outside date_to
-                fetch_limit = _date_fetch_limit(limit, date_to, has_range)
+                fetch_limit = _date_fetch_limit(limit, has_range)
                 for ci, chunk in enumerate(chunks, 1):
                     print(f"   📡 Stage 1 chunk {ci}/{len(chunks)}: {chunk}")
                     chunk_input = {
                         "username":           chunk,
                         "resultsLimit":       fetch_limit * len(chunk),
-                        "excludePinnedReels": True,
+                        "skipPinnedPosts":    True,
                     }
                     if date_from:
-                        chunk_input["onlyAfter"] = date_from  # actor-native — saves credits
+                        chunk_input["onlyPostsNewerThan"] = date_from  # actor-native — saves credits
                     chunk_raw = call_apify("apify/instagram-reel-scraper", chunk_input, apikey)
                     raw_data.extend(chunk_raw)
                     print(f"      → {len(chunk_raw)} reels")
                 print(f"   📡 Stage 1 total: {len(raw_data)} raw reels across {len(chunks)} chunk(s)")
 
                 if has_range:
-                    def _item_date(d):
-                        for field in ("timestamp","takenAtTimestamp","taken_at","postedAt","date"):
-                            v = d.get(field)
-                            if v:
-                                try:
-                                    if isinstance(v, (int,float)):
-                                        return datetime.datetime.utcfromtimestamp(v).strftime("%Y-%m-%d")
-                                    return str(v)[:10]
-                                except Exception: pass
-                        return ""
                     before_count = len(raw_data)
-                    raw_data = [d for d in raw_data
-                               if (lambda pd: pd and (not date_from or pd >= date_from) and (not date_to or pd <= date_to))(_item_date(d))]
+                    # Keep undated posts; only drop DATED posts outside the window.
+                    def _in_window(d):
+                        pd = _extract_post_date(d)
+                        if not pd: return True   # undated — keep, can't date-filter
+                        if date_from and pd < date_from: return False
+                        if date_to and pd > date_to:     return False
+                        return True
+                    raw_data = [d for d in raw_data if _in_window(d)]
+                    undated = sum(1 for d in raw_data if not _extract_post_date(d))
                     print(f"   📅 Date filter [{date_from or 'start'} → {date_to or 'now'}]: "
-                          f"{len(raw_data)}/{before_count} reels kept")
+                          f"{len(raw_data)}/{before_count} reels kept ({undated} undated)")
             elif is_ig:
                 # General scraper — can't batch, process only current handle
                 ig_url = f"https://www.instagram.com/{kol}/"
@@ -1387,15 +1395,7 @@ def process_job(job):
             def _norm(s): return unicodedata.normalize("NFKD", str(s)).encode("ascii","ignore").decode().lower().strip()
 
             def _post_date(d) -> str:
-                for field in ("timestamp","takenAtTimestamp","taken_at","postedAt","date"):
-                    v = d.get(field)
-                    if v:
-                        try:
-                            if isinstance(v, (int, float)):
-                                return datetime.datetime.utcfromtimestamp(v).strftime("%Y-%m-%d")
-                            return str(v)[:10]
-                        except: pass
-                return ""
+                return _extract_post_date(d)
 
             by_handle = {}  # handle → [items]
             single_handle = len(all_handles) == 1
@@ -1471,7 +1471,7 @@ def process_job(job):
                                 "play_count":int(d.get("playCount") or d.get("videoPlayCount") or 0),
                                 "likes":d.get("diggCount",0),"comments":d.get("commentCount",0),
                                 "shares":d.get("shareCount",0),
-                                "post_date": str(d.get("createTime","") or "")[:10],
+                                "post_date": _post_date(d),
                                 "content_type": "Video"}
                                for d in items if d.get("webVideoUrl") or d.get("videoUrl")]
 
