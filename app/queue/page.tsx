@@ -21,12 +21,12 @@ const JOB_TYPES = [
   "E-Commerce Intelligence",
 ];
 
-const STATUSES = [
-  { value: "PENDING",         label: "Pending" },
-  { value: "AUTO_PROCESSING", label: "Processing" },
-  { value: "COMPLETED",       label: "Completed" },
-  { value: "FAILED",          label: "Failed" },
-];
+const STATUS_SUMMARY = [
+  { key: "PENDING",         label: "Pending",    color: "#fbbf24" },
+  { key: "AUTO_PROCESSING", label: "Processing", color: "#a78bfa" },
+  { key: "COMPLETED",       label: "Completed",  color: "#34d399" },
+  { key: "FAILED",          label: "Failed",     color: "#f87171" },
+] as const;
 
 const selectCls =
   "px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
@@ -39,10 +39,20 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
   const [sort,           setSort]           = useState<"desc" | "asc">("desc");
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
 
+  // Fetch all statuses so the summary counts are accurate; filter by status client-side.
   const { jobs, isLoading, error, refetch, cancelJob, retryJob } = useJobs(
     activeProjectId,
-    { status: statusFilter || undefined, job_type: jobTypeFilter || undefined, sort }
+    { job_type: jobTypeFilter || undefined, sort }
   );
+
+  const counts: Record<string, number> = {
+    PENDING:         jobs.filter((j) => j.status === "PENDING").length,
+    AUTO_PROCESSING: jobs.filter((j) => j.status === "AUTO_PROCESSING").length,
+    COMPLETED:       jobs.filter((j) => j.status === "COMPLETED").length,
+    FAILED:          jobs.filter((j) => j.status === "FAILED").length,
+  };
+
+  const displayedJobs = statusFilter ? jobs.filter((j) => j.status === statusFilter) : jobs;
 
   async function handleCancel(job: Job) {
     try { await cancelJob(job.job_id); }
@@ -84,13 +94,46 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
 
   return (
     <div>
+      {/* Status summary cards */}
+      {activeProjectId && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          {STATUS_SUMMARY.map((s) => {
+            const active = statusFilter === s.key;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => setStatusFilter(active ? "" : s.key)}
+                className="rounded-xl border p-4 text-left transition-all"
+                style={{
+                  background: active ? `${s.color}12` : "#0d1829",
+                  borderColor: active ? `${s.color}66` : "rgba(255,255,255,0.07)",
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full inline-block" style={{ background: s.color }} />
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">{s.label}</span>
+                </div>
+                <p className="text-2xl font-bold mt-1.5" style={{ fontFamily: "Outfit, sans-serif", color: active ? s.color : "#dde4f4" }}>
+                  {counts[s.key]}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex flex-wrap gap-3">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={selectCls}>
-            <option value="">All Statuses</option>
-            {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          {statusFilter && (
+            <button
+              onClick={() => setStatusFilter("")}
+              className="px-3 py-1.5 text-sm rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted transition-colors"
+            >
+              ✕ {STATUS_SUMMARY.find((s) => s.key === statusFilter)?.label} only
+            </button>
+          )}
           <select value={jobTypeFilter} onChange={(e) => setJobTypeFilter(e.target.value)} className={selectCls}>
             <option value="">All Job Types</option>
             {JOB_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -124,7 +167,7 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
         <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           Loading jobs…
         </div>
-      ) : jobs.length === 0 ? (
+      ) : displayedJobs.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">
           No jobs found for the current filters.
         </div>
@@ -139,7 +182,7 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {jobs.map((job) => {
+              {displayedJobs.map((job) => {
                 const canExport  = job.status === "COMPLETED" && job.job_type in EXPORT_ENDPOINTS;
                 const isExporting = exportingJobId === job.job_id;
                 return (
@@ -182,7 +225,7 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
           </table>
           <div className="px-4 py-2.5 border-t border-border bg-muted text-xs text-muted-foreground flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#10b981" }} />
-            {jobs.length} job{jobs.length !== 1 ? "s" : ""} · Realtime updates active
+            {displayedJobs.length} job{displayedJobs.length !== 1 ? "s" : ""}{statusFilter ? " shown" : ""} · Realtime updates active
           </div>
         </div>
       )}

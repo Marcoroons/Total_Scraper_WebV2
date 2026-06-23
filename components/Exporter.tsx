@@ -6,8 +6,8 @@ import {
 } from "lucide-react";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import {
-  EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS, REPORT_METRICS, DEFAULT_METRICS,
-  buildExportPayload, exportFilename, formatDateTime, type FunctionKey,
+  EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS,
+  buildBatchExportPayload, batchExportFilename, formatDateTime, type FunctionKey,
 } from "@/lib/exportConfig";
 
 // ─── Date range presets ───────────────────────────────────────────────────────
@@ -65,9 +65,6 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
 
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Export config
-  const [metrics, setMetrics] = useState<string[]>(DEFAULT_METRICS);
 
   // Export progress
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
@@ -159,44 +156,53 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     setSelected(allVisibleSelected ? new Set() : new Set(finishedJobs.map((j) => j.job_id)));
   }
 
-  function toggleMetric(m: string) {
-    setMetrics((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
-  }
-
   // Selected jobs that can actually be exported (completed + known endpoint).
   const exportableSelected = useMemo(
     () => finishedJobs.filter((j) => selected.has(j.job_id) && j.status === "COMPLETED" && j.job_type in EXPORT_ENDPOINTS),
     [finishedJobs, selected]
   );
 
-  // ── Direct export + download (one file per selected completed job) ─────────
+  // Jobs sharing an export endpoint + platform are combined into ONE workbook.
+  // Different types/platforms have different column schemas, so each distinct
+  // (type, platform) combo yields its own file.
+  const exportGroups = useMemo(() => {
+    const groups = new Map<string, Job[]>();
+    for (const job of exportableSelected) {
+      const key = `${job.job_type}__${job.platform}`;
+      const arr = groups.get(key);
+      if (arr) arr.push(job); else groups.set(key, [job]);
+    }
+    return Array.from(groups.values());
+  }, [exportableSelected]);
+
+  // ── Export + download — one compiled file per (type, platform) group ───────
   async function handleExportDownload() {
-    if (exportableSelected.length === 0) return;
-    setExporting({ done: 0, total: exportableSelected.length });
+    if (exportGroups.length === 0) return;
+    setExporting({ done: 0, total: exportGroups.length });
     let failures = 0;
-    for (let i = 0; i < exportableSelected.length; i++) {
-      const job = exportableSelected[i];
+    for (let i = 0; i < exportGroups.length; i++) {
+      const group = exportGroups[i];
+      const endpoint = EXPORT_ENDPOINTS[group[0].job_type];
       try {
-        const endpoint = EXPORT_ENDPOINTS[job.job_type];
         const res = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildExportPayload(job, endpoint)),
+          body: JSON.stringify(buildBatchExportPayload(group, endpoint)),
         });
         if (!res.ok) { failures++; }
         else {
           const blob = await res.blob();
           const url  = URL.createObjectURL(blob);
           const a    = document.createElement("a");
-          a.href = url; a.download = exportFilename(job);
+          a.href = url; a.download = batchExportFilename(group[0], group.length);
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           URL.revokeObjectURL(url);
         }
       } catch { failures++; }
-      setExporting({ done: i + 1, total: exportableSelected.length });
+      setExporting({ done: i + 1, total: exportGroups.length });
     }
     setExporting(null);
-    if (failures > 0) alert(`${failures} of ${exportableSelected.length} export(s) failed (the export service may be cold-starting — retry in ~30s).`);
+    if (failures > 0) alert(`${failures} of ${exportGroups.length} export file(s) failed (the export service may be cold-starting — retry in ~30s).`);
   }
 
   async function handleRescrape(job: Job) {
@@ -224,7 +230,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           project_id:      activeProjectId,
           recipient_email: recipient.trim(),
           job_types:       fnFilter === "all" ? SCRAPE_FUNCTIONS.map((f) => f.jobType) : [SCRAPE_FUNCTIONS.find((f) => f.key === fnFilter)!.jobType],
-          metrics,
+          metrics:         [],
           date_from:       bounds ? new Date(bounds.from).toISOString() : null,
           date_to:         bounds ? new Date(bounds.to).toISOString() : null,
           frequency,
@@ -361,49 +367,26 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         )}
       </div>
 
-      {/* ════════ Config + actions ════════ */}
+      {/* ════════ Export actions ════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
-
-        {/* Metrics */}
-        <div className="bg-card border border-border rounded-xl p-5">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-4">Report metrics</p>
-          <div className="grid grid-cols-2 gap-2">
-            {REPORT_METRICS.map((m) => {
-              const active = metrics.includes(m);
-              return (
-                <button key={m} type="button" onClick={() => toggleMetric(m)}
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-left transition-all"
-                  style={{ background: active ? "rgba(0,201,255,0.05)" : "var(--input)", borderColor: active ? "rgba(0,201,255,0.3)" : "rgba(255,255,255,0.07)" }}>
-                  <span className="w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border transition-all"
-                    style={{ background: active ? "#00c9ff" : "transparent", borderColor: active ? "#00c9ff" : "rgba(255,255,255,0.2)" }}>
-                    {active && <svg className="w-2.5 h-2.5" viewBox="0 0 10 8" fill="none" style={{ color: "#060c18" }}><path d="M1 4l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                  </span>
-                  <span className="text-sm" style={{ color: active ? "#dde4f4" : "#5a7294" }}>{m}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="space-y-5">
 
           {/* Direct export */}
           <div className="bg-card border border-border rounded-xl p-5">
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">Export now</p>
             <p className="text-xs text-muted-foreground mb-4">
-              Downloads an Excel file for each selected completed job.
+              Compiles the selected completed jobs into a single Excel file. The columns reflect whatever was scraped.
+              {exportGroups.length > 1 && " Mixed scrape types or platforms are split into one file each (different column layouts)."}
             </p>
             <button
               type="button"
               onClick={handleExportDownload}
-              disabled={exportableSelected.length === 0 || exporting !== null}
+              disabled={exportGroups.length === 0 || exporting !== null}
               className="w-full py-3 text-sm font-semibold rounded-xl flex items-center justify-center gap-2 transition-opacity hover:opacity-90 disabled:opacity-40"
               style={{ background: "linear-gradient(135deg, #00c9ff, #0087d8)", color: "#060c18" }}
             >
               {exporting
                 ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting {exporting.done}/{exporting.total}…</>
-                : <><Download className="w-4 h-4" /> Export &amp; download ({exportableSelected.length})</>}
+                : <><Download className="w-4 h-4" /> Export &amp; download ({exportableSelected.length} job{exportableSelected.length !== 1 ? "s" : ""}{exportGroups.length > 1 ? ` → ${exportGroups.length} files` : ""})</>}
             </button>
           </div>
 
@@ -465,7 +448,6 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               </div>
             )}
           </div>
-        </div>
       </div>
     </div>
   );

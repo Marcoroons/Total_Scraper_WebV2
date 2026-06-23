@@ -39,8 +39,33 @@ export function buildExportPayload(job: Job, endpoint: string) {
   return { ...base, video_urls: [job.target_url] };
 }
 
+/**
+ * Combine many jobs of the SAME endpoint + platform into one export call, so the
+ * Railway service returns a single workbook containing all of them. The export
+ * endpoints already accept arrays (usernames / video_urls).
+ */
+export function buildBatchExportPayload(jobs: Job[], endpoint: string) {
+  const first = jobs[0];
+  const base = { project_id: first.project_id, platform: first.platform, endpoint };
+  if (endpoint === "export/profile-audit") {
+    return {
+      ...base,
+      usernames: jobs.map((j) => j.kol_username).filter(Boolean),
+      sort_by: "Most Views",
+      incl_top5: true,
+      incl_bot5: false,
+    };
+  }
+  return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean) };
+}
+
 export function exportFilename(job: Job) {
   return `${job.job_type.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_${job.platform.toLowerCase()}_${job.job_id.slice(0, 8)}.xlsx`;
+}
+
+export function batchExportFilename(job: Job, count: number) {
+  const type = job.job_type.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return `${type}_${job.platform.toLowerCase()}_${count}_items.xlsx`;
 }
 
 export function formatDateTime(iso: string) {
