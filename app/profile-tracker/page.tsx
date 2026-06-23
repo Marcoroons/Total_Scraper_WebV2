@@ -121,6 +121,7 @@ export default function ProfileTrackerPage() {
   const [successCount, setSuccessCount] = useState<number | null>(null);
 
   const isTikTok = platform === "TikTok";
+  const today = new Date().toISOString().split("T")[0];
   const dateInvalid = dateFrom && dateTo && dateFrom > dateTo;
 
   async function handleQueue() {
@@ -134,6 +135,10 @@ export default function ProfileTrackerPage() {
     if (filled.length === 0) errs.push("No profiles entered — add at least one URL or @handle.");
     if (rawMetrics.length === 0 && calcMetrics.length === 0) errs.push("No metrics selected — pick at least one raw or calculated metric.");
     if (dateInvalid) errs.push("Date range invalid — start date is after end date.");
+    if (startMode === "specific" && !dateFrom) errs.push("Start is set to 'Specific date' but no start date was entered.");
+    if (endMode === "specific" && !dateTo) errs.push("End is set to 'Specific date' but no end date was entered.");
+    if (dateFrom && dateFrom > today) errs.push("Start date is in the future — pick today or earlier.");
+    if (dateTo && dateTo > today) errs.push("End date is in the future — pick today or earlier.");
 
     setErrors(errs);
     if (errs.length > 0) return;
@@ -288,6 +293,7 @@ export default function ProfileTrackerPage() {
                 <input
                   type="date"
                   value={dateFrom}
+                  max={dateTo || today}
                   onChange={(e) => setDateFrom(e.target.value)}
                   className={inputCls}
                 />
@@ -313,6 +319,8 @@ export default function ProfileTrackerPage() {
                 <input
                   type="date"
                   value={dateTo}
+                  min={dateFrom || undefined}
+                  max={today}
                   onChange={(e) => setDateTo(e.target.value)}
                   className={inputCls}
                 />
