@@ -1,0 +1,9 @@
+supabase
+requests
+httpx>=0.28.0
+pandas
+openpyxl
+feedparser==6.0.11
+pytrends==4.9.2
+google-api-python-client==2.118.0
+curl_cffi==0.15.0
