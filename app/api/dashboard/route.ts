@@ -34,7 +34,7 @@ async function verifyProjectAccess(supabase: SB, projectId: string, userId: stri
   return !!pm;
 }
 
-const COLUMNS = "job_id, target_url, platform, job_type, kol_username, status, created_at";
+const COLUMNS = "job_id, target_url, platform, job_type, kol_username, target_limit, status, created_at";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -153,5 +153,35 @@ export async function GET(request: NextRequest) {
   const viewsByPlatform: Record<string, number> = {};
   for (const k of kols) viewsByPlatform[k.platform] = (viewsByPlatform[k.platform] ?? 0) + k.views;
 
-  return NextResponse.json({ jobs: jobs ?? [], prevTotal, totals, kols, viewsByPlatform });
+  // ── Scrape completeness / failure rate (profile feed jobs) ──────────────────
+  // For each completed profile scrape, compare the posts we actually have for
+  // that KOL against the requested target_limit. "empty" = nothing came back at
+  // all (the reliable hard-failure signal: private / rate-limited / failed).
+  // "partial" = fewer than requested (note: post counts are cumulative per KOL,
+  // so partial is a conservative lower bound).
+  const postsByKey = new Map<string, number>();
+  for (const k of kols) postsByKey.set(`${k.platform}__${k.name}`, k.posts);
+
+  const profileJobs = completed.filter((j) => j.job_type === "Profile Feed (Audit)" && j.kol_username);
+  let empty = 0, partial = 0, ok = 0;
+  for (const j of profileJobs) {
+    const got = postsByKey.get(`${j.platform}__${j.kol_username}`) ?? 0;
+    const req = Number((j as { target_limit?: unknown }).target_limit) || 0;
+    if (got === 0) empty++;
+    else if (req > 0 && got < req) partial++;
+    else ok++;
+  }
+  const profileTotal = profileJobs.length;
+  const failures     = empty + partial;
+  const completeness = {
+    profileTotal,
+    empty,
+    partial,
+    ok,
+    failures,
+    emptyRate:   profileTotal > 0 ? (empty / profileTotal) * 100 : 0,
+    failureRate: profileTotal > 0 ? (failures / profileTotal) * 100 : 0,
+  };
+
+  return NextResponse.json({ jobs: jobs ?? [], prevTotal, totals, kols, viewsByPlatform, completeness });
 }

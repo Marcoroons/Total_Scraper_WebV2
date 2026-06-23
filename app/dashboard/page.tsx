@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, ChevronDown, Clock, Eye, FolderOpen, Heart, Loader2,
+  AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, FolderOpen, Heart, Loader2,
   MessageCircle, Share2, type LucideIcon,
 } from "lucide-react";
 import {
@@ -23,6 +23,7 @@ const PLATFORM_COLOR: Record<string, string> = { Instagram: "#f472b6", TikTok: "
 
 interface KolAgg { name: string; platform: string; views: number; likes: number; comments: number; shares: number; posts: number }
 interface Totals { views: number; likes: number; comments: number; shares: number; posts: number }
+interface Completeness { profileTotal: number; empty: number; partial: number; ok: number; failures: number; emptyRate: number; failureRate: number }
 
 // ─── Date range ────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,7 @@ export default function DashboardPage() {
   const [totals, setTotals] = useState<Totals>({ views: 0, likes: 0, comments: 0, shares: 0, posts: 0 });
   const [kols, setKols] = useState<KolAgg[]>([]);
   const [viewsByPlatform, setViewsByPlatform] = useState<Record<string, number>>({});
+  const [completeness, setCompleteness] = useState<Completeness | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -139,6 +141,7 @@ export default function DashboardPage() {
       setTotals(data.totals ?? { views: 0, likes: 0, comments: 0, shares: 0, posts: 0 });
       setKols(data.kols ?? []);
       setViewsByPlatform(data.viewsByPlatform ?? {});
+      setCompleteness(data.completeness ?? null);
     } catch {
       setError("Network error loading dashboard.");
     } finally {
@@ -271,6 +274,35 @@ export default function DashboardPage() {
               );
             })}
           </div>
+
+          {/* Scrape completeness / failure-rate disclaimer */}
+          {completeness && completeness.profileTotal > 0 && (() => {
+            const failing = completeness.failureRate > 0;
+            const accent = failing ? "#f59e0b" : "#10b981";
+            return (
+              <div className="rounded-2xl p-4 flex items-start gap-3"
+                style={{ background: `${accent}0d`, border: `1px solid ${accent}33` }}>
+                {failing
+                  ? <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: accent }} />
+                  : <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: accent }} />}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium" style={{ color: accent }}>
+                    Scrape completeness — {completeness.failureRate.toFixed(1)}% failure rate
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    {completeness.failures === 0
+                      ? `All ${completeness.profileTotal} profile scrapes returned the requested number of posts.`
+                      : `${completeness.failures} of ${completeness.profileTotal} profile scrapes returned fewer posts than requested` +
+                        (completeness.empty > 0 ? `, and ${completeness.empty} returned nothing at all.` : ".")}
+                    {" "}
+                    <strong className="text-foreground">Why this happens:</strong> private accounts, platform rate-limiting,
+                    a narrow date range (posts outside it are dropped), or &quot;Reels Only&quot; on image-heavy creators.
+                    Treat zero/low-post KOLs as inconclusive — not as zero performance.
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ROW 2 — top KOLs by views + views by platform */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

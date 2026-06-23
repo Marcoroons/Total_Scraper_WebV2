@@ -36,6 +36,10 @@ const REGULATORY = [
     body: "Data persists in the database until you delete it. Access is gated by authentication and per-project membership. Secrets (API keys, service credentials) are stored as server-side environment variables and are never exposed to the browser. Rotate any credential you believe has been exposed.",
   },
   {
+    title: "Data completeness & accuracy",
+    body: "Scrapes can return fewer posts than requested, or none at all. Common causes: private/restricted accounts the API cannot read, platform rate-limiting, a date range that excludes most of a creator's recent posts, and content-type filters (e.g. 'Reels Only' on an image-heavy account). The live failure rate is shown on the Dashboard. A zero- or low-post result means the data was inconclusive — it should NOT be read as zero performance for that creator.",
+  },
+  {
     title: "Research use & no warranty",
     body: "This platform is intended for legitimate market research, brand analytics, and academic purposes. Commercial redistribution of scraped data without appropriate licensing is prohibited. Data accuracy and availability are not guaranteed — platform/API changes or rate limiting may affect results at any time, and no liability is accepted for decisions made on collected data.",
   },
