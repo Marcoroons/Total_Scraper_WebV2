@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Download, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Download, RefreshCw, RotateCcw, XCircle } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -53,6 +53,48 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
   };
 
   const displayedJobs = statusFilter ? jobs.filter((j) => j.status === statusFilter) : jobs;
+
+  // Scraped post counts for completed Profile Feed jobs (kol_snapshots.total_posts),
+  // keyed by `${platform}__${username}`. Used to flag scrapes that returned fewer
+  // posts than requested.
+  const [scrapeCounts, setScrapeCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!activeProjectId) { setScrapeCounts({}); return; }
+    const profileJobs = jobs.filter(
+      (j) => j.status === "COMPLETED" && j.job_type === "Profile Feed (Audit)" && j.kol_username
+    );
+    if (profileJobs.length === 0) { setScrapeCounts({}); return; }
+
+    const byPlatform = new Map<string, Set<string>>();
+    for (const j of profileJobs) {
+      const set = byPlatform.get(j.platform) ?? new Set<string>();
+      set.add(j.kol_username);
+      byPlatform.set(j.platform, set);
+    }
+
+    let cancelled = false;
+    (async () => {
+      const merged: Record<string, number> = {};
+      for (const [platform, usernames] of Array.from(byPlatform.entries())) {
+        const params = new URLSearchParams({
+          project_id: activeProjectId,
+          platform,
+          usernames: Array.from(usernames).join(","),
+        });
+        try {
+          const res = await fetch(`/api/scrape-count?${params}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          for (const [u, info] of Object.entries(data.counts ?? {})) {
+            merged[`${platform}__${u}`] = (info as { total_posts: number }).total_posts;
+          }
+        } catch { /* best-effort */ }
+      }
+      if (!cancelled) setScrapeCounts(merged);
+    })();
+    return () => { cancelled = true; };
+  }, [jobs, activeProjectId]);
 
   async function handleCancel(job: Job) {
     try { await cancelJob(job.job_id); }
@@ -196,7 +238,30 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
                       <span className="truncate block" title={job.job_type}>{job.job_type}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <JobStatusBadge status={job.status} errorMessage={job.error_message} />
+                      <div className="flex flex-col gap-1 items-start">
+                        <JobStatusBadge status={job.status} errorMessage={job.error_message} />
+                        {(() => {
+                          if (job.status !== "COMPLETED" || job.job_type !== "Profile Feed (Audit)") return null;
+                          const scraped = scrapeCounts[`${job.platform}__${job.kol_username}`];
+                          if (scraped === undefined) return null;
+                          const requested = job.target_limit;
+                          const short = requested > 0 && scraped < requested;
+                          return (
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                              title={short
+                                ? `This scrape returned ${scraped} post(s), fewer than the ${requested} requested.`
+                                : `Scraped ${scraped} post(s).`}
+                              style={short
+                                ? { background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", color: "#fbbf24" }
+                                : { background: "rgba(90,114,148,0.1)", border: "1px solid rgba(90,114,148,0.25)", color: "#8899b0" }}
+                            >
+                              {short && <AlertTriangle className="w-2.5 h-2.5" />}
+                              {short ? `${scraped} of ${requested} posts` : `${scraped} posts`}
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs whitespace-nowrap">{formatDateTime(job.created_at)}</td>
                     <td className="px-4 py-3">
