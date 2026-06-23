@@ -72,7 +72,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const supabase = createClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
       if (authError) {
         const msg = authError.message ?? "";
         if (/failed to fetch|network|fetch/i.test(msg)) {

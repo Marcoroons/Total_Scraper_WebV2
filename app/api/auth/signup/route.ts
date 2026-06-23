@@ -59,6 +59,20 @@ export async function POST(request: NextRequest) {
         auth: { autoRefreshToken: false, persistSession: false },
       });
 
+      // Defensive duplicate check via the profiles mirror (best-effort) so we
+      // reject a repeat email cleanly before even calling createUser. createUser
+      // itself also enforces uniqueness as the authoritative backstop below.
+      try {
+        const { data: dupe } = await admin
+          .from("profiles").select("id").eq("email", cleanEmail).maybeSingle();
+        if (dupe) {
+          return NextResponse.json(
+            { error: "An account with this email already exists. Try signing in instead." },
+            { status: 409 }
+          );
+        }
+      } catch { /* profiles table may not exist yet — rely on createUser below */ }
+
       const { data: created, error: createErr } = await admin.auth.admin.createUser({
         email: cleanEmail,
         password,

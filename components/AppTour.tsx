@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, X } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 
 // ─── Tour steps ───────────────────────────────────────────────────────────────
 
@@ -98,55 +97,27 @@ export function AppTour() {
   const [active,   setActive]   = useState(false);
   const [step,     setStep]     = useState(0);
   const [rect,     setRect]     = useState<DOMRect | null>(null);
-  const userId = useRef<string | null>(null);
 
   // Hydration guard — portals need the DOM
   useEffect(() => { setMounted(true); }, []);
 
-  // Persist "seen" — localStorage (per-browser) + profiles flag (per-account).
-  const markSeen = useCallback(async () => {
-    const id = userId.current;
-    if (!id) return;
-    try { localStorage.setItem(`ts:tour-seen:${id}`, "1"); } catch { /* ignore */ }
-    try {
-      const sb = createClient();
-      await sb.from("profiles").update({ has_completed_tour: true }).eq("id", id);
-    } catch { /* best-effort — column may not be migrated yet */ }
-  }, []);
+  const completeTour = useCallback(() => { setActive(false); }, []);
 
-  const completeTour = useCallback(() => {
-    setActive(false);
-    markSeen();
-  }, [markSeen]);
-
-  // Auto-start ONLY ONCE, for a brand-new user's first session. We mark it seen
-  // the instant it opens, so a refresh mid-tour can't re-trigger it. Repeat users
-  // only ever see it again by clicking "Take the tour" in the Handbook.
+  // Auto-start ONLY for brand-new sign-ups. The signup flow sets a one-shot
+  // "ts:show-tour" flag; we consume it here and clear it immediately, so it
+  // shows exactly once right after signup. Plain sign-ins never set the flag,
+  // so the tour never reappears on login. Repeat users replay it from the
+  // Handbook's "Take the tour" button.
   useEffect(() => {
     if (!mounted) return;
-    (async () => {
-      const sb = createClient();
-      const { data: { user } } = await sb.auth.getUser();
-      if (!user) return;
-      userId.current = user.id;
-
-      try {
-        if (localStorage.getItem(`ts:tour-seen:${user.id}`)) return;
-      } catch { /* ignore */ }
-
-      const { data: profile } = await sb
-        .from("profiles")
-        .select("has_completed_tour")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (profile && profile.has_completed_tour === false) {
+    try {
+      if (localStorage.getItem("ts:show-tour")) {
+        localStorage.removeItem("ts:show-tour");
         setStep(0);
         setActive(true);
-        markSeen();   // persist immediately — never auto-shows again
       }
-    })();
-  }, [mounted, markSeen]);
+    } catch { /* ignore */ }
+  }, [mounted]);
 
   // Listen for manual re-trigger (Tour button in header)
   useEffect(() => {

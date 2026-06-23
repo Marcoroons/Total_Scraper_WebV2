@@ -59,6 +59,10 @@ export default function SignupPage() {
         return;
       }
 
+      // One-shot flag — the onboarding tour shows exactly once, only for new
+      // sign-ups (consumed + cleared by AppTour). Plain logins never set this.
+      try { localStorage.setItem("ts:show-tour", "1"); } catch { /* ignore */ }
+
       if (data.signInFailed) {
         router.push("/login?created=1");
         return;
