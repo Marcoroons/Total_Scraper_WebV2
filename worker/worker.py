@@ -1031,6 +1031,29 @@ def _filter_ig_content(data: list, format_filter: str) -> list:
     return filtered
 
 
+def _date_fetch_limit(limit: int, date_to: str, has_range: bool) -> int:
+    """
+    How many newest posts to pull from the actor when a date window is set.
+
+    The IG/TikTok actors return newest-first and have NO "before this date"
+    cutoff. So to actually land `limit` posts on/before date_to, we must
+    over-fetch far enough to skip past everything newer than date_to. We scale
+    by how many days back the end date is (~2 posts/day after the cutoff), then
+    add the limit and cap it so a far-back end date doesn't blow the credit budget.
+
+    Examples (limit=20): end date today -> 20; ~2 months back -> ~140; capped 300.
+    """
+    if not has_range:
+        return limit
+    days_back = 0
+    if date_to:
+        try:
+            days_back = max(0, (datetime.date.today() - datetime.date.fromisoformat(str(date_to)[:10])).days)
+        except Exception:
+            days_back = 0
+    return min(limit + int(days_back * 2) + 10, 300)
+
+
 def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
                      date_from: str = "", date_to: str = "") -> list:
     """
@@ -1089,7 +1112,7 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
 
     profile_url = f"https://www.instagram.com/{handle}/"
     has_range = bool(date_from or date_to)
-    fetch_limit = min(int(limit * 1.5) + (1 if limit % 2 else 0), 150) if has_range else limit  # oversample only when filtering by date
+    fetch_limit = _date_fetch_limit(limit, date_to, has_range)  # over-fetch to reach the date window
 
     def _post_ts(item) -> str:
         for field in ("timestamp", "takenAtTimestamp", "taken_at", "postedAt", "date"):
@@ -1314,7 +1337,7 @@ def process_job(job):
                 chunks = [all_handles[i:i+CHUNK_SIZE] for i in range(0, len(all_handles), CHUNK_SIZE)]
                 raw_data = []
                 # Oversample when filtering by date — some results will fall outside date_to
-                fetch_limit = min(int(limit * 1.5) + (1 if limit % 2 else 0), 150) if has_range else limit
+                fetch_limit = _date_fetch_limit(limit, date_to, has_range)
                 for ci, chunk in enumerate(chunks, 1):
                     print(f"   📡 Stage 1 chunk {ci}/{len(chunks)}: {chunk}")
                     chunk_input = {
