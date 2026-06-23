@@ -22,12 +22,42 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
+  const [resetMsg, setResetMsg] = useState("");
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("created") === "1") {
-      setJustCreated(true);
-    }
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("created") === "1") setJustCreated(true);
+    if (p.get("reset")   === "1") setResetMsg("Password updated — sign in with your new password.");
+    if (p.get("deleted") === "1") setResetMsg("Your account has been deleted.");
   }, []);
+
+  async function handleForgotPassword() {
+    setError("");
+    setResetMsg("");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Enter your email above first, then click “Forgot password”.");
+      return;
+    }
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    if (!url.startsWith("https://")) {
+      setError("App is not configured: Supabase credentials are missing.");
+      return;
+    }
+    setResetting(true);
+    try {
+      const supabase = createClient();
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (resetError) { setError(resetError.message || "Could not send reset email."); return; }
+      setResetMsg(`If an account exists for ${email.trim()}, a password-reset link is on its way. Check your inbox.`);
+    } catch {
+      setError("Network error — could not send reset email.");
+    } finally {
+      setResetting(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -162,9 +192,19 @@ export default function LoginPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
-                  Password
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                    Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={resetting}
+                    className="text-[11px] text-primary hover:opacity-80 transition-opacity disabled:opacity-50"
+                  >
+                    {resetting ? "Sending…" : "Forgot password?"}
+                  </button>
+                </div>
                 <input
                   type="password"
                   required
@@ -181,6 +221,15 @@ export default function LoginPage() {
                   style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
                 >
                   {error}
+                </div>
+              )}
+
+              {resetMsg && (
+                <div
+                  className="rounded-lg px-3 py-2 text-sm"
+                  style={{ background: "rgba(0,201,255,0.06)", border: "1px solid rgba(0,201,255,0.2)", color: "#00c9ff" }}
+                >
+                  {resetMsg}
                 </div>
               )}
 
