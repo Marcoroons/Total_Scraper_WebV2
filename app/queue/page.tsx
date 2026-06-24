@@ -6,6 +6,7 @@ import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { Exporter } from "@/components/Exporter";
+import { TaskLoader } from "@/components/TaskLoader";
 import { EXPORT_ENDPOINTS, buildExportPayload, exportFilename, formatDateTime } from "@/lib/exportConfig";
 
 // ─── Job Queue constants ──────────────────────────────────────────────────────
@@ -136,6 +137,13 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
 
   return (
     <div>
+      {/* Task-loading video — shows above the cards while jobs load */}
+      {activeProjectId && isLoading && (
+        <div className="mb-5">
+          <TaskLoader />
+        </div>
+      )}
+
       {/* Status summary cards */}
       {activeProjectId && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
