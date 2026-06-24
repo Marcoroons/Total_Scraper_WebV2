@@ -254,6 +254,8 @@ def generate_profile_audit_excel(
     sort_by: str = "Most Views",
     incl_top5: bool = True,
     incl_bot5: bool = False,
+    limit: int = 0,
+    requested_usernames=None,
 ) -> io.BytesIO:
     """
     Compact Profile Feed (Audit) export.
@@ -310,6 +312,10 @@ def generate_profile_audit_excel(
     # Preserve paste order — use first-appearance of each username, not alphabetical
     ordered_kols = list(dict.fromkeys(df["username"].tolist()))
     max_videos = max((len(df[df["username"] == k]) for k in ordered_kols), default=0)
+    # Cap columns to exactly the requested number of videos (the DB can hold more
+    # than one scrape's worth of rows per creator; we only show `limit`).
+    if limit and limit > 0:
+        max_videos = min(max_videos, limit)
 
     # ── Colour palette ────────────────────────────────────────────────────────
     NAVY   = "1B3A6B"; WHITE = "FFFFFF"; LBLUE = "EBF3FB"
@@ -370,6 +376,8 @@ def generate_profile_audit_excel(
     for row_idx, kol in enumerate(ordered_kols, 2):
         group = df[df["username"] == kol]
         group   = _sort_group(group).reset_index(drop=True)
+        if limit and limit > 0:
+            group = group.head(limit).reset_index(drop=True)   # exactly `limit`, no more
         plays   = group["play_count"]
         n       = len(group)
         avg_v   = int(plays.mean()) if n else 0
@@ -552,6 +560,33 @@ def generate_profile_audit_excel(
         ("• TikTok Play Count increments every time the video starts, including auto-play and loops.", False),
         ("• Scraped metrics reflect values at time of collection and may differ from current on-app figures.", False),
     ]
+
+    # ── Data completeness — flag creators that returned nothing / fewer than asked ──
+    try:
+        present_lower = {str(u).lower() for u in df["username"].unique()}
+        req = [str(u) for u in (requested_usernames or [])]
+        missing = [u for u in req if u.lower() not in present_lower]
+        partial = []
+        if limit and limit > 0:
+            for k in ordered_kols:
+                shown = min(len(df[df["username"] == k]), limit)
+                if shown < limit:
+                    partial.append((k, shown))
+        comp = [("", False), ("DATA COMPLETENESS", True)]
+        if limit and limit > 0:
+            comp.append((f"Requested up to {limit} videos per creator.", False))
+        if not missing and not partial:
+            comp.append(("• All requested creators returned the full number of videos.", False))
+        for u in missing:
+            comp.append((f"• @{u}: NO DATA returned. Likely cause: private/restricted account, "
+                         f"an Apify actor error, or a connectivity/rate-limit issue. Re-scrape to retry.", False))
+        for k, cnt in partial:
+            comp.append((f"• @{k}: {cnt}/{limit} videos (fewer than requested). Likely cause: a narrow date "
+                         f"range, a low-posting creator, or partial rate-limiting.", False))
+        notes = notes + comp
+    except Exception:
+        pass
+
     for text, bold in notes:
         ws3.append([text])
         ws3.cell(ws3.max_row, 1).font = Font(bold=bold, size=9, name="Calibri")

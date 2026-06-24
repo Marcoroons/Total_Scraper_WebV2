@@ -104,10 +104,18 @@ export async function POST(request: NextRequest) {
     }) => ({ ...rest, status: "PENDING" })
   );
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("scrape_jobs")
     .insert(rows)
     .select();
+
+  // Column-safe: if the optional max_retries column hasn't been migrated yet,
+  // strip it and retry so queueing still works.
+  if (error && /max_retries/i.test(error.message)) {
+    const stripped = rows.map(({ max_retries: _mr, ...r }) => r);
+    ({ data, error } = await supabase.from("scrape_jobs").insert(stripped).select());
+  }
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });
 }

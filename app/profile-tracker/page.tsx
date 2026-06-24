@@ -104,6 +104,7 @@ export default function ProfileTrackerPage() {
   const [platform,    setPlatform]    = useState<Platform>("Instagram");
   const [format,      setFormat]      = useState<string>("");
   const [postLimit,   setPostLimit]   = useState(10);
+  const [retries,     setRetries]     = useState(1);
   const [startMode,   setStartMode]   = useState<"all" | "specific">("all");
   const [endMode,     setEndMode]     = useState<"now" | "specific">("now");
   const [dateFrom,    setDateFrom]    = useState("");
@@ -164,6 +165,7 @@ export default function ProfileTrackerPage() {
         calc_metrics:  calcMetrics,
         format_filter: isTikTok ? "All Formats" : format,
         target_limit:  postLimit,
+        max_retries:   retries,
         ...(startMode === "specific" && dateFrom ? { date_from: dateFrom } : {}),
         ...(endMode   === "specific" && dateTo   ? { date_to:   dateTo   } : {}),
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
@@ -244,17 +246,33 @@ export default function ProfileTrackerPage() {
           </div>
         )}
 
-        {/* Posts per profile */}
-        <div className="bg-card border border-border rounded-xl p-5 space-y-2">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Posts per profile</p>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={postLimit}
-            onChange={(e) => setPostLimit(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
-            className={`w-28 ${inputCls}`}
-          />
+        {/* Posts per profile + retry attempts */}
+        <div className="bg-card border border-border rounded-xl p-5 flex flex-wrap gap-8">
+          <div className="space-y-2">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Posts per profile</p>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={postLimit}
+              onChange={(e) => setPostLimit(Math.min(200, Math.max(1, Number(e.target.value) || 1)))}
+              className={`w-28 ${inputCls}`}
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Retry attempts</p>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={retries}
+              onChange={(e) => setRetries(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+              className={`w-28 ${inputCls}`}
+            />
+            <p className="text-xs text-muted-foreground max-w-[260px]">
+              How many times to re-scrape a creator solo if it returns fewer than the requested posts. Min 1. Stops early once a pass finds nothing new.
+            </p>
+          </div>
         </div>
 
         {/* Date range */}

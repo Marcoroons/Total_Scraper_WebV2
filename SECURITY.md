@@ -169,6 +169,11 @@ end $$;
 - **Auth → Providers**: ensure same-email-across-providers linking is off.
 - **Database → Tables**: confirm RLS is **On** for every table (above).
 
-## Handled in code (this change)
+## Handled in code
 - Fixed `/api/nlp-config` IDOR — now verifies project access on GET + PUT.
 - Length caps on project/team names; existing email-format + enum validation retained.
+- **Account-enumeration:** signup no longer confirms whether an email is registered —
+  duplicate emails return a generic message and the existence pre-check was removed
+  (`createUser` still prevents duplicates authoritatively). Login and password reset
+  were already generic. Caveat: instant sign-up auto-logs-in a *new* email, so
+  existence can't be fully hidden — the invite-code gate remains the primary control.

@@ -1208,6 +1208,8 @@ def process_job(job):
     plat   = job.get("platform","Instagram")
     target = job.get("target_url","")
     limit  = int(job.get("target_limit") or 50)
+    # User-selected solo-retry passes for short handles (min 1, capped for safety).
+    max_retries = max(1, min(int(job.get("max_retries") or 1), 10))
     # Extract kol from kol_username or fall back to parsing the target_url
     # (original tab_extract.py stored "" when the user pasted a URL, not a @handle)
     _raw_kol = str(job.get("kol_username") or "").strip()
@@ -1425,8 +1427,12 @@ def process_job(job):
                             if _norm(h) in _norm(raw_user) or _norm(raw_user) in _norm(h):
                                 matched = h; break
                     if not matched:
-                        # Unmatched in batch → likely collab, assign to handle with fewest items
-                        matched = min(all_handles, key=lambda hh: len(by_handle.get(hh,[])))
+                        # Unmatched → a collab/cross-post we can't attribute. Do NOT
+                        # assign it to the fewest-items handle (that misattributes data
+                        # and creates phantom "0 results" for the real owner). Set it
+                        # aside; the targeted retry re-fetches any empty handle solo.
+                        by_handle.setdefault("__unmatched__", []).append(d)
+                        continue
                     by_handle.setdefault(matched, []).append(d)
 
             print(f"   🔄 Stage 2: Distribution:")
@@ -1441,6 +1447,51 @@ def process_job(job):
                         print(f"         Possible match under: {close}")
                     else:
                         print(f"         ⚠️ API returned 0 for this handle — private account? Rate limited?")
+
+            # ── Targeted retry: re-scrape SHORT handles solo, up to max_retries ──
+            # After the batch finishes we detect every handle that returned fewer than
+            # the requested `limit` and re-run it individually with the SAME parameters
+            # (format + date window). A solo fetch sidesteps batch mis-attribution and
+            # transient rate-limits and often returns more; we keep the larger set
+            # (merged, de-duped by URL — Stage 3 caps to limit). The user picks how many
+            # passes (>=1); we also stop early once a whole pass yields no improvement,
+            # so a genuinely low-posting creator isn't looped on needlessly.
+            if is_ig:
+                def _url_of(d):
+                    return d.get("url") or d.get("webVideoUrl") or d.get("videoUrl") or ""
+                for attempt in range(1, max_retries + 1):
+                    short = [h for h in all_handles if len(by_handle.get(h, [])) < limit]
+                    if not short:
+                        break
+                    print(f"   ♻️ Retry pass {attempt}/{max_retries}: {len(short)} handle(s) under {limit}")
+                    improved_any = False
+                    for h in short:
+                        existing = by_handle.get(h, [])
+                        try:
+                            retry = _call_ig_profile(
+                                f"https://www.instagram.com/{h}/", fmt, limit, apikey,
+                                date_from=date_from, date_to=date_to,
+                            )
+                        except Exception as e:
+                            print(f"   ♻️ Retry @{h} errored: {str(e)[:120]}")
+                            continue
+                        if not retry:
+                            continue
+                        seen, merged = set(), []
+                        for d in list(existing) + list(retry):
+                            u = _url_of(d)
+                            if u and u in seen:
+                                continue
+                            if u:
+                                seen.add(u)
+                            merged.append(d)
+                        if len(merged) > len(existing):
+                            by_handle[h] = merged
+                            improved_any = True
+                            print(f"   ♻️ Retry @{h}: {len(existing)} → {len(merged)} post(s)")
+                    if not improved_any:
+                        print(f"   ♻️ Pass {attempt} recovered nothing new — stopping retries early")
+                        break
 
             # ── Stage 3: Build payloads and insert per handle ────────────────
             total_saved = 0

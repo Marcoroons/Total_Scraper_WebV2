@@ -7,6 +7,11 @@ function isConfigured(v: string | undefined): v is string {
   return !!v && v.trim().length > 0 && !v.trim().toLowerCase().startsWith("your-");
 }
 
+// Generic failure shown for a duplicate email — deliberately does NOT confirm the
+// address is registered, to avoid an account-enumeration oracle.
+const GENERIC_SIGNUP_FAIL =
+  "Couldn't complete sign-up with those details. If you already have an account, sign in or use “Forgot password”.";
+
 export async function POST(request: NextRequest) {
   // Top-level guard: this route must ALWAYS return JSON, never an HTML 500,
   // otherwise the client's res.json() throws and surfaces "Network error".
@@ -59,20 +64,9 @@ export async function POST(request: NextRequest) {
         auth: { autoRefreshToken: false, persistSession: false },
       });
 
-      // Defensive duplicate check via the profiles mirror (best-effort) so we
-      // reject a repeat email cleanly before even calling createUser. createUser
-      // itself also enforces uniqueness as the authoritative backstop below.
-      try {
-        const { data: dupe } = await admin
-          .from("profiles").select("id").eq("email", cleanEmail).maybeSingle();
-        if (dupe) {
-          return NextResponse.json(
-            { error: "An account with this email already exists. Try signing in instead." },
-            { status: 409 }
-          );
-        }
-      } catch { /* profiles table may not exist yet — rely on createUser below */ }
-
+      // createUser enforces email uniqueness authoritatively (no duplicates),
+      // so we skip any existence pre-check and never echo "email already exists"
+      // — duplicates return the same generic message as other failures.
       const { data: created, error: createErr } = await admin.auth.admin.createUser({
         email: cleanEmail,
         password,
@@ -82,10 +76,7 @@ export async function POST(request: NextRequest) {
       if (createErr) {
         const msg = (createErr.message ?? "").toLowerCase();
         if (msg.includes("already") || msg.includes("exists") || msg.includes("registered")) {
-          return NextResponse.json(
-            { error: "An account with this email already exists. Try signing in instead." },
-            { status: 409 }
-          );
+          return NextResponse.json({ error: GENERIC_SIGNUP_FAIL }, { status: 400 });
         }
         return NextResponse.json({ error: createErr.message || "Failed to create account." }, { status: 400 });
       }
@@ -120,10 +111,7 @@ export async function POST(request: NextRequest) {
     if (error) {
       const msg = (error.message ?? "").toLowerCase();
       if (msg.includes("already") || msg.includes("exists") || msg.includes("registered")) {
-        return NextResponse.json(
-          { error: "An account with this email already exists. Try signing in instead." },
-          { status: 409 }
-        );
+        return NextResponse.json({ error: GENERIC_SIGNUP_FAIL }, { status: 400 });
       }
       return NextResponse.json({ error: error.message }, { status: 400 });
     }

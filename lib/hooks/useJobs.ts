@@ -44,6 +44,7 @@ export interface JobPayload {
   date_from?: string;
   date_to?: string;
   apify_api_key?: string;
+  max_retries?: number;
 }
 
 export function useJobs(projectId: string | null, filters: JobFilters = {}) {
