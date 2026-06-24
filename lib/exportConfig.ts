@@ -47,7 +47,13 @@ export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptio
   const o = { ...DEFAULT_OPTS, ...opts };
   const base = { project_id: job.project_id, platform: job.platform, endpoint };
   if (endpoint === "export/profile-audit") {
-    return { ...base, usernames: [job.kol_username].filter(Boolean), sort_by: o.sortBy, incl_top5: o.inclTop5, incl_bot5: o.inclBot5, limit: Number(job.target_limit) || 0 };
+    return {
+      ...base, usernames: [job.kol_username].filter(Boolean),
+      sort_by: o.sortBy, incl_top5: o.inclTop5, incl_bot5: o.inclBot5,
+      limit: Number(job.target_limit) || 0,
+      calc_metrics: job.calc_metrics ?? [],
+      date_from: job.date_from ?? "", date_to: job.date_to ?? "",
+    };
   }
   return { ...base, video_urls: [job.target_url] };
 }
@@ -73,6 +79,9 @@ export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: Exp
       incl_bot5: o.inclBot5,
       // Cap to the largest requested limit in the batch (each job's posts-per-profile).
       limit: Math.max(0, ...jobs.map((j) => Number(j.target_limit) || 0)),
+      // Metrics/date window come from the first job (a batch shares one scrape config).
+      calc_metrics: first.calc_metrics ?? [],
+      date_from: first.date_from ?? "", date_to: first.date_to ?? "",
     };
   }
   return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean) };

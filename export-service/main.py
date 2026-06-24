@@ -110,6 +110,9 @@ class ProfileAuditRequest(BaseModel):
     incl_top5: bool = True
     incl_bot5: bool = False
     limit: int = 0   # cap videos per creator to exactly this (0 = no cap)
+    calc_metrics: list[str] = []   # user-selected calculated metrics (e.g. Engagement Rate)
+    date_from: str = ""            # chosen scrape window start (for the duration column)
+    date_to: str = ""
 
 
 class NLPRequest(BaseModel):
@@ -161,6 +164,9 @@ def export_profile_audit(req: ProfileAuditRequest):
         incl_top5=req.incl_top5,
         incl_bot5=req.incl_bot5,
         limit=req.limit,
+        calc_metrics=req.calc_metrics,
+        date_from=req.date_from,
+        date_to=req.date_to,
         requested_usernames=req.usernames,
     )
     platform_slug = req.platform.lower()

@@ -114,7 +114,13 @@ export default function HashtagsPage() {
     if (rows.length === 0) return;
     const cols: (keyof TrendRow)[] = ["search_target","platform","username","play_count","likes","comments","shares","video_duration","audio_track","caption","video_url"];
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\r\n");
+    const header = [...cols, "engagement_rate_pct"].join(",");
+    const lines = rows.map((r) => {
+      const plays = Number(r.play_count) || 0;
+      const er = plays ? ((Number(r.likes) + Number(r.comments) + Number(r.shares)) / plays) * 100 : 0;
+      return [...cols.map((c) => esc(r[c])), esc(er.toFixed(2))].join(",");
+    });
+    const csv = [header, ...lines].join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const a = document.createElement("a");
     a.href = url; a.download = `hashtag_trends_${Date.now()}.csv`;

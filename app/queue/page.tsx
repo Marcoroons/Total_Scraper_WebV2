@@ -34,7 +34,7 @@ const selectCls =
 
 // ─── Job Queue panel ──────────────────────────────────────────────────────────
 
-function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) {
+function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: string | null; onActivity?: (active: boolean) => void }) {
   const [statusFilter,   setStatusFilter]   = useState("");
   const [jobTypeFilter,  setJobTypeFilter]  = useState("");
   const [sort,           setSort]           = useState<"desc" | "asc">("desc");
@@ -54,6 +54,11 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
   };
 
   const displayedJobs = statusFilter ? jobs.filter((j) => j.status === statusFilter) : jobs;
+
+  // Tell the page when there's outstanding work, so it can show the Task Loading
+  // animation in the header while jobs are pending/processing.
+  const activeCount = counts.PENDING + counts.AUTO_PROCESSING;
+  useEffect(() => { onActivity?.(activeCount > 0); }, [activeCount, onActivity]);
 
   // Scraped post counts for completed Profile Feed jobs (kol_snapshots.total_posts),
   // keyed by `${platform}__${username}`. Used to flag scrapes that returned fewer
@@ -137,13 +142,6 @@ function JobQueuePanel({ activeProjectId }: { activeProjectId: string | null }) 
 
   return (
     <div>
-      {/* Task-loading video — shows above the cards while jobs load */}
-      {activeProjectId && isLoading && (
-        <div className="mb-5">
-          <TaskLoader />
-        </div>
-      )}
-
       {/* Status summary cards */}
       {activeProjectId && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
@@ -318,17 +316,19 @@ type Tab = (typeof TABS)[number]["id"];
 export default function QueuePage() {
   const { activeProjectId, activeProjectName } = useProject();
   const [tab, setTab] = useState<Tab>("queue");
+  const [queueActive, setQueueActive] = useState(false);
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-4">
+      {/* Header — Task Loading animation sits in the empty band, right side */}
+      <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <h1 className="text-xl font-bold text-foreground">Queue &amp; Export</h1>
           {activeProjectName && (
             <p className="text-sm text-muted-foreground mt-0.5">{activeProjectName}</p>
           )}
         </div>
+        {tab === "queue" && queueActive && <TaskLoader />}
       </div>
 
       {/* Tab bar */}
@@ -349,7 +349,7 @@ export default function QueuePage() {
         ))}
       </div>
 
-      {tab === "queue"    && <JobQueuePanel activeProjectId={activeProjectId} />}
+      {tab === "queue"    && <JobQueuePanel activeProjectId={activeProjectId} onActivity={setQueueActive} />}
       {tab === "exporter" && <Exporter activeProjectId={activeProjectId} />}
     </div>
   );

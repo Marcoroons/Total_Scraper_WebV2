@@ -255,6 +255,9 @@ def generate_profile_audit_excel(
     incl_top5: bool = True,
     incl_bot5: bool = False,
     limit: int = 0,
+    calc_metrics=None,
+    date_from: str = "",
+    date_to: str = "",
     requested_usernames=None,
 ) -> io.BytesIO:
     """
@@ -292,6 +295,38 @@ def generate_profile_audit_excel(
     df["play_count"] = pd.to_numeric(df["play_count"], errors="coerce").fillna(0).astype(int)
     df["post_url"]   = df["post_url"].fillna("").astype(str)
     df["post_date"]  = df["post_date"].fillna("").astype(str).str[:10]
+
+    # ── Respect the chosen scrape window ────────────────────────────────────────
+    # influencer_profiles accumulates EVERY scrape of a creator, so without this an
+    # export would show out-of-window posts (e.g. June posts when you asked for
+    # "up to 30 May") — making the date filter look ignored. Keep only dated posts
+    # inside [date_from, date_to]; undated rows are dropped when a window is set
+    # since they can't be confirmed in range.
+    if date_from or date_to:
+        _parsed = pd.to_datetime(df["post_date"], errors="coerce")
+        _mask = _parsed.notna()
+        if date_from:
+            _mask &= _parsed >= pd.to_datetime(date_from, errors="coerce")
+        if date_to:
+            _mask &= _parsed <= pd.to_datetime(date_to, errors="coerce")
+        df = df[_mask].reset_index(drop=True)
+
+    # ── Calculated-metric columns for the Video Details sheet ───────────────────
+    # Honour the metrics the user selected at scrape time. Only those derivable
+    # from views/likes/comments/shares are computed here — VTR and CPV need a
+    # separate view count / rate that profile audits don't capture.
+    _CALC_FORMULAS = {
+        "Engagement Rate":    lambda v, l, c, s: ((l + c + s) / v * 100) if v else 0.0,
+        "Applause Rate":      lambda v, l, c, s: (l / v * 100) if v else 0.0,
+        "Virality Rate":      lambda v, l, c, s: (s / v * 100) if v else 0.0,
+        "Comment/View Ratio": lambda v, l, c, s: (c / v * 100) if v else 0.0,
+    }
+    sel_calc = [m for m in (calc_metrics or []) if m in _CALC_FORMULAS]
+    if not sel_calc:
+        sel_calc = ["Engagement Rate"]   # sensible default so the sheet is never bare
+    unsupported_calc = [m for m in (calc_metrics or []) if m in ("VTR", "CPV ($)")]
+    scrape_range = (f"{date_from or 'start'} -> {date_to or 'now'}"
+                    if (date_from or date_to) else "All time")
 
     def _sort_group(g: pd.DataFrame) -> pd.DataFrame:
         if sort_by == "Most Views":   return g.sort_values("play_count", ascending=False)
@@ -497,44 +532,50 @@ def generate_profile_audit_excel(
     # SHEET 2: Full Details — one row per video, all columns visible
     # ═══════════════════════════════════════════════════════════════════════════
     ws2 = wb.create_sheet("Video Details")
-    detail_headers = ["KOL / Creator", "Platform", "Video #", "Views",
-                      "Date Posted", "Likes", "Comments", "Shares",
-                      "Sort Order", "Video URL"]
+    detail_headers = (["KOL / Creator", "Platform", "Video #", "Views",
+                       "Date Posted", "Likes", "Comments", "Shares"]
+                      + sel_calc
+                      + ["Scrape Range", "Sort Order", "Video URL"])
     ws2.append(detail_headers)
     for cell in ws2[1]:
         cell.fill = fill(NAVY); cell.font = hfont(); cell.border = BORDER
         cell.alignment = align()
     ws2.row_dimensions[1].height = 24
 
+    left_cols = {"KOL / Creator", "Platform", "Date Posted", "Scrape Range", "Sort Order", "Video URL"}
     detail_row = 2
     for kol in ordered_kols:
         group = df[df["username"] == kol]
         group = _sort_group(group).reset_index(drop=True)
+        if limit and limit > 0:
+            group = group.head(limit).reset_index(drop=True)   # match the summary cap
         for i, (_, vrow) in enumerate(group.iterrows(), 1):
-            row = [
-                kol, platform_label, i,
-                int(vrow["play_count"]),
-                str(vrow.get("post_date","") or "")[:10],
-                int(vrow.get("likes",0) or 0),
-                int(vrow.get("comments",0) or 0),
-                int(vrow.get("shares",0) or 0),
-                sort_by,
-                str(vrow.get("post_url","") or ""),
-            ]
+            v = int(vrow["play_count"])
+            l = int(vrow.get("likes", 0) or 0)
+            c = int(vrow.get("comments", 0) or 0)
+            s = int(vrow.get("shares", 0) or 0)
+            row = [kol, platform_label, i, v,
+                   str(vrow.get("post_date", "") or "")[:10], l, c, s]
+            row += [round(_CALC_FORMULAS[m](v, l, c, s), 2) for m in sel_calc]
+            row += [scrape_range, sort_by, str(vrow.get("post_url", "") or "")]
             ws2.append(row)
             bg = LBLUE if i % 2 == 0 else WHITE
             for col_idx, cell in enumerate(ws2[detail_row], 1):
-                cell.fill   = fill(bg); cell.border = BORDER
-                cell.font   = cell_font()
-                cell.alignment = align("left" if col_idx in (1,2,5,9,10) else "center")
-                if isinstance(cell.value, int): cell.number_format = "#,##0"
+                cell.fill = fill(bg); cell.border = BORDER; cell.font = cell_font()
+                hdr = detail_headers[col_idx - 1]
+                cell.alignment = align("left" if hdr in left_cols else "center")
+                if hdr in sel_calc:
+                    cell.number_format = '0.00"%"'
+                elif isinstance(cell.value, int):
+                    cell.number_format = "#,##0"
             ws2.row_dimensions[detail_row].height = 16
             detail_row += 1
 
     for col_idx, header in enumerate(detail_headers, 1):
         ws2.column_dimensions[get_column_letter(col_idx)].width = (
             28 if header in ("KOL / Creator","Video URL") else
-            14 if header in ("Date Posted","Sort Order") else 12
+            16 if header == "Scrape Range" else
+            14 if header in ("Date Posted","Sort Order") else 13
         )
     ws2.freeze_panes = "A2"
 
@@ -546,6 +587,7 @@ def generate_profile_audit_excel(
         ("Total Scraper — Profile Feed (Audit) Export", True),
         (f"Platform: {platform_label}", False),
         (f"Video Sort Order: {sort_by}", False),
+        (f"Scrape Date Range: {scrape_range}", False),
         (f"Top 5 included: {incl_top5}   |   Bottom 5 included: {incl_bot5}", False),
         ("", False),
         ("HOW TO READ THE KOL VIEWS SHEET", True),
@@ -560,6 +602,20 @@ def generate_profile_audit_excel(
         ("• TikTok Play Count increments every time the video starts, including auto-play and loops.", False),
         ("• Scraped metrics reflect values at time of collection and may differ from current on-app figures.", False),
     ]
+
+    # ── Calculated metrics shown in the Video Details sheet ─────────────────────
+    _calc_desc = {
+        "Engagement Rate":    "(Likes + Comments + Shares) / Views x 100%",
+        "Applause Rate":      "Likes / Views x 100%",
+        "Virality Rate":      "Shares / Views x 100%",
+        "Comment/View Ratio": "Comments / Views x 100%",
+    }
+    notes += [("", False), ("CALCULATED METRICS (Video Details sheet)", True)]
+    for m in sel_calc:
+        notes.append((f"• {m}: {_calc_desc.get(m, '')}", False))
+    if unsupported_calc:
+        notes.append((f"• {', '.join(unsupported_calc)}: not shown — needs a separate view "
+                      f"count / cost figure that a profile audit doesn't capture.", False))
 
     # ── Data completeness — flag creators that returned nothing / fewer than asked ──
     try:
