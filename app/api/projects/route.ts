@@ -100,6 +100,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  if (project_name.trim().length > 100) {
+    return NextResponse.json({ error: "project_name too long (max 100 chars)" }, { status: 400 });
+  }
 
   const { data, error } = await supabase
     .from("projects")

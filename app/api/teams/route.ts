@@ -48,6 +48,7 @@ export async function POST(request: Request) {
 
   const { team_name } = (await request.json()) as { team_name?: string };
   if (!team_name?.trim()) return NextResponse.json({ error: "team_name is required" }, { status: 400 });
+  if (team_name.trim().length > 100) return NextResponse.json({ error: "team_name too long (max 100 chars)" }, { status: 400 });
 
   const { data: team, error } = await supabase
     .from("teams")
