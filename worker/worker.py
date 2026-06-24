@@ -48,6 +48,17 @@ APIFY_TOKEN     = os.environ.get("APIFY_TOKEN","").strip()
 META_AD_TOKEN   = os.environ.get("META_AD_TOKEN","").strip()
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
 
+# ── Competitor Intelligence kill-switch ──────────────────────────────────────
+# OFF by default. While off, the daily Multi-Layer Intelligence compiler never
+# runs and the competitor job types short-circuit, so neither can block or slow
+# the core scrape→Excel path. Flip ENABLE_INTELLIGENCE=true (Railway → Variables)
+# once Competitor Analysis is ready to ship. No code is removed — only gated.
+ENABLE_INTELLIGENCE = os.environ.get("ENABLE_INTELLIGENCE", "").strip().lower() in ("1", "true", "yes", "on")
+INTELLIGENCE_JOB_TYPES = {
+    "Competitor Ads (Meta)", "YouTube Intelligence",
+    "E-Commerce Intelligence", "Competitor Intelligence Scan",
+}
+
 try:
     supabase: Client = db.make_client()
     print("✅ Supabase connected.")
@@ -1261,6 +1272,14 @@ def process_job(job):
     print(f"\n{'='*48}\n🔄 {jid} | {plat} | {jtype}\n   Target: {target}")
 
     try:
+        if jtype in INTELLIGENCE_JOB_TYPES and not ENABLE_INTELLIGENCE:
+            # Gated off so it can't run heavy Playwright/pytrends work. The job is
+            # marked FAILED with a clear reason rather than silently hanging.
+            raise RuntimeError(
+                "Competitor Intelligence is disabled on this worker "
+                "(set ENABLE_INTELLIGENCE=true to enable)."
+            )
+
         if jtype == "Trend Discovery (Hashtag)":
             tags = [h.replace("#","").strip() for h in target.split(",") if h.strip()]
             if is_ig:
@@ -1892,7 +1911,8 @@ def compile_daily_snapshots():
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN LOOP
 # ─────────────────────────────────────────────────────────────────────────────
-print("\n🚀 Worker online — polling every 10s")
+print(f"\n🚀 Worker online — polling every 3s | Competitor Intelligence: "
+      f"{'ON' if ENABLE_INTELLIGENCE else 'OFF (set ENABLE_INTELLIGENCE=true to enable)'}")
 last_compiled = None
 
 while True:
@@ -1907,11 +1927,12 @@ while True:
         autos = db.get_due_automations(supabase, now_iso)
         if autos: process_automation(autos[0]); continue
         
-        today = datetime.date.today()
-        if os.environ.get("LAST_COMPILED_DATE") != today.isoformat():
-            compile_daily_snapshots()
-            os.environ["LAST_COMPILED_DATE"] = today.isoformat()
-            
-        time.sleep(10)
+        if ENABLE_INTELLIGENCE:
+            today = datetime.date.today()
+            if os.environ.get("LAST_COMPILED_DATE") != today.isoformat():
+                compile_daily_snapshots()
+                os.environ["LAST_COMPILED_DATE"] = today.isoformat()
+
+        time.sleep(3)
     except Exception as e:
         print(f"🚨 Loop Err: {e}"); time.sleep(10)
