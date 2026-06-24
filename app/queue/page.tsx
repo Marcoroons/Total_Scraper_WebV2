@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Download, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { AlertTriangle, Download, RefreshCw, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
@@ -39,9 +39,11 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
   const [jobTypeFilter,  setJobTypeFilter]  = useState("");
   const [sort,           setSort]           = useState<"desc" | "asc">("desc");
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
+  const [selectedIds,    setSelectedIds]    = useState<Set<string>>(new Set());
+  const [deleting,       setDeleting]       = useState(false);
 
   // Fetch all statuses so the summary counts are accurate; filter by status client-side.
-  const { jobs, isLoading, error, refetch, cancelJob, retryJob } = useJobs(
+  const { jobs, isLoading, error, refetch, cancelJob, retryJob, deleteJobs } = useJobs(
     activeProjectId,
     { job_type: jobTypeFilter || undefined, sort }
   );
@@ -59,6 +61,49 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
   // animation in the header while jobs are pending/processing.
   const activeCount = counts.PENDING + counts.AUTO_PROCESSING;
   useEffect(() => { onActivity?.(activeCount > 0); }, [activeCount, onActivity]);
+
+  // ── Row selection + bulk delete ─────────────────────────────────────────────
+  // Only ever act on currently-visible (filtered) rows, so a hidden selection
+  // can't be deleted by surprise.
+  const visibleSelected = displayedJobs.filter((j) => selectedIds.has(j.job_id)).map((j) => j.job_id);
+  const allSelected = displayedJobs.length > 0 && visibleSelected.length === displayedJobs.length;
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) displayedJobs.forEach((j) => next.delete(j.job_id));
+      else displayedJobs.forEach((j) => next.add(j.job_id));
+      return next;
+    });
+  }
+  async function handleDeleteSelected() {
+    if (visibleSelected.length === 0) return;
+    const n = visibleSelected.length;
+    if (!window.confirm(
+      `Delete ${n} job${n !== 1 ? "s" : ""} from the queue? This removes the queue ` +
+      `entr${n !== 1 ? "ies" : "y"} and can't be undone. Data already scraped is kept.`
+    )) return;
+    setDeleting(true);
+    try {
+      await deleteJobs(visibleSelected);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        visibleSelected.forEach((id) => next.delete(id));
+        return next;
+      });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   // Scraped post counts for completed Profile Feed jobs (kol_snapshots.total_posts),
   // keyed by `${platform}__${username}`. Used to flag scrapes that returned fewer
@@ -193,13 +238,26 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
             {sort === "desc" ? "↓ Newest First" : "↑ Oldest First"}
           </button>
         </div>
-        <button
-          onClick={refetch}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {visibleSelected.length > 0 && (
+            <button
+              onClick={handleDeleteSelected}
+              disabled={deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors disabled:opacity-50"
+              style={{ borderColor: "rgba(239,68,68,0.4)", color: "#f87171", background: "rgba(239,68,68,0.08)" }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {deleting ? "Deleting…" : `Delete (${visibleSelected.length})`}
+            </button>
+          )}
+          <button
+            onClick={refetch}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -224,6 +282,15 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted text-left">
+                <th className="px-4 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all jobs"
+                    className="accent-primary cursor-pointer align-middle"
+                  />
+                </th>
                 {["Target", "Platform", "Job Type", "Status", "Created", "Actions"].map((h) => (
                   <th key={h} className="px-4 py-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">{h}</th>
                 ))}
@@ -234,7 +301,16 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
                 const canExport  = job.status === "COMPLETED" && job.job_type in EXPORT_ENDPOINTS;
                 const isExporting = exportingJobId === job.job_id;
                 return (
-                  <tr key={job.job_id} className="hover:bg-muted/50 transition-colors">
+                  <tr key={job.job_id} className={`hover:bg-muted/50 transition-colors ${selectedIds.has(job.job_id) ? "bg-primary/5" : ""}`}>
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(job.job_id)}
+                        onChange={() => toggleOne(job.job_id)}
+                        aria-label="Select job"
+                        className="accent-primary cursor-pointer align-middle"
+                      />
+                    </td>
                     <td className="px-4 py-3 max-w-[200px]">
                       <p className="truncate font-medium text-foreground" title={job.target_url}>{job.kol_username || job.target_url}</p>
                       {job.kol_username && <p className="text-xs text-muted-foreground truncate">{job.target_url}</p>}

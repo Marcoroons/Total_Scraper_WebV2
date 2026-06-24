@@ -143,5 +143,17 @@ export function useJobs(projectId: string | null, filters: JobFilters = {}) {
     if (!res.ok) throw new Error((await res.json()).error ?? "Failed to retry job");
   }, []);
 
-  return { jobs, isLoading, error, refetch, createJobs, cancelJob, retryJob };
+  const deleteJobs = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const res = await fetch("/api/jobs", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error ?? "Failed to delete jobs");
+    // Realtime only streams INSERT/UPDATE, so drop the deleted rows locally.
+    setJobs((prev) => prev.filter((j) => !ids.includes(j.job_id)));
+  }, []);
+
+  return { jobs, isLoading, error, refetch, createJobs, cancelJob, retryJob, deleteJobs };
 }

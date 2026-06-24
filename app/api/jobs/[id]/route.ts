@@ -119,12 +119,6 @@ export async function DELETE(
   const { job, allowed } = await getJobWithAccess(supabase, params.id, user.id);
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
   if (!allowed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (job.status !== "PENDING") {
-    return NextResponse.json(
-      { error: "Only PENDING jobs can be deleted" },
-      { status: 400 }
-    );
-  }
 
   const { error } = await supabase
     .from("scrape_jobs")

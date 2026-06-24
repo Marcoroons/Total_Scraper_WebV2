@@ -119,3 +119,46 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });
 }
+
+// Bulk-delete jobs by id (any status). Only deletes jobs whose project the
+// caller can access; unknown ids are silently skipped.
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const ids: string[] = Array.isArray(body?.ids)
+    ? body.ids.filter((x: unknown): x is string => typeof x === "string")
+    : [];
+  if (ids.length === 0) {
+    return NextResponse.json({ error: "ids array is required" }, { status: 400 });
+  }
+
+  const { data: jobs, error: fetchErr } = await supabase
+    .from("scrape_jobs")
+    .select("job_id, project_id")
+    .in("job_id", ids);
+  if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
+  if (!jobs || jobs.length === 0) return NextResponse.json({ deleted: 0 });
+
+  const projectIds = Array.from(new Set(jobs.map((j) => j.project_id as string)));
+  for (const pid of projectIds) {
+    if (!(await verifyProjectAccess(supabase, pid, user.id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
+
+  const deletable = jobs.map((j) => j.job_id as string);
+  const { error: delErr } = await supabase
+    .from("scrape_jobs")
+    .delete()
+    .in("job_id", deletable);
+  if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
+  return NextResponse.json({ deleted: deletable.length });
+}
