@@ -21,6 +21,7 @@ import {
   TrendingUp,
   User,
   Users,
+  UserSearch,
   Video,
   X,
 } from "lucide-react";
@@ -45,6 +46,7 @@ const NAV: NavSection[] = [
       { href: "/profile-tracker", label: "Profile Scraper",     icon: User,          color: "#a78bfa" },
       { href: "/comments",        label: "Comment Sentiment",   icon: MessageSquare, color: "#f472b6" },
       { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf" },
+      { href: "/kol-finder",      label: "KOL Finder",          icon: UserSearch,    color: "#fbbf24" },
       { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c", soon: true },
     ],
   },
@@ -75,6 +77,7 @@ const TITLES: Record<string, string> = {
   "/profile-tracker": "Profile Scraper",
   "/comments":        "Comment Sentiment Analysis",
   "/hashtags":        "Hashtag / Trend Analysis",
+  "/kol-finder":      "KOL Finder",
   "/queue":           "Queue & Export",
   "/competitor":      "Competitor Analysis",
   "/handbook":        "Handbook",
