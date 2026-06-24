@@ -109,6 +109,7 @@ export default function ProfileTrackerPage() {
   const [endMode,     setEndMode]     = useState<"now" | "specific">("now");
   const [dateFrom,    setDateFrom]    = useState("");
   const [dateTo,      setDateTo]      = useState("");
+  const [dateMultiplier, setDateMultiplier] = useState(3);
   const [rawMetrics,  setRawMetrics]  = useState<string[]>([]);
   const [calcMetrics, setCalcMetrics] = useState<string[]>([]);
   const [profiles,    setProfiles]    = useState<string[]>([""]);
@@ -168,6 +169,8 @@ export default function ProfileTrackerPage() {
         max_retries:   retries,
         ...(startMode === "specific" && dateFrom ? { date_from: dateFrom } : {}),
         ...(endMode   === "specific" && dateTo   ? { date_to:   dateTo   } : {}),
+        ...(((startMode === "specific" && dateFrom) || (endMode === "specific" && dateTo))
+          ? { date_multiplier: dateMultiplier } : {}),
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
       });
     }
@@ -349,6 +352,30 @@ export default function ProfileTrackerPage() {
               Range: {dateFrom || "start"} → {dateTo || "now"}
             </p>
           )}
+
+          {/* Over-fetch multiplier — only relevant once a date window is chosen */}
+          {(startMode === "specific" || endMode === "specific") && (
+            <div className="pt-3 border-t border-border space-y-2">
+              <div className="flex items-center gap-3 flex-wrap">
+                <p className="text-xs font-medium text-muted-foreground">Extra scrape multiplier</p>
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  step={0.1}
+                  value={dateMultiplier}
+                  onChange={(e) => setDateMultiplier(Math.min(5, Math.max(1, Number(e.target.value) || 1)))}
+                  className={`w-24 ${inputCls}`}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {dateMultiplier}× of {postLimit} ≈ up to {Math.round(postLimit * dateMultiplier)} posts fetched
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Posts arrive newest-first, so to reach the older end of your range we fetch <span className="text-foreground">more</span> than your post count, then keep the ones inside the dates. Higher = reaches further back, but uses more Apify credits. Range 1–5 (decimals OK).
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Metrics */}
@@ -399,6 +426,9 @@ export default function ProfileTrackerPage() {
                 {!isTikTok && <div><span className="text-muted-foreground">Content: </span><span className="text-foreground font-medium">{format || "—"}</span></div>}
                 <div><span className="text-muted-foreground">Posts/profile: </span><span className="text-foreground font-medium">{postLimit}</span></div>
                 <div><span className="text-muted-foreground">Date range: </span><span className="text-foreground font-medium">{(startMode === "specific" && dateFrom) || "start"} → {(endMode === "specific" && dateTo) || "now"}</span></div>
+                {(startMode === "specific" || endMode === "specific") && (
+                  <div><span className="text-muted-foreground">Date over-fetch: </span><span className="text-foreground font-medium">{dateMultiplier}×</span></div>
+                )}
                 <div><span className="text-muted-foreground">Metrics: </span><span className="text-foreground font-medium">{metricCount} selected</span></div>
                 <div><span className="text-muted-foreground">Profiles: </span><span className="text-foreground font-medium">{previewRows.length}</span></div>
               </div>

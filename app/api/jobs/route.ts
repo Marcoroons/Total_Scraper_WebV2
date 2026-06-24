@@ -109,10 +109,10 @@ export async function POST(request: NextRequest) {
     .insert(rows)
     .select();
 
-  // Column-safe: if the optional max_retries column hasn't been migrated yet,
-  // strip it and retry so queueing still works.
-  if (error && /max_retries/i.test(error.message)) {
-    const stripped = rows.map(({ max_retries: _mr, ...r }) => r);
+  // Column-safe: if an optional column (max_retries / date_multiplier) hasn't
+  // been migrated yet, strip them and retry so queueing still works.
+  if (error && /max_retries|date_multiplier/i.test(error.message)) {
+    const stripped = rows.map(({ max_retries: _mr, date_multiplier: _dm, ...r }) => r);
     ({ data, error } = await supabase.from("scrape_jobs").insert(stripped).select());
   }
 

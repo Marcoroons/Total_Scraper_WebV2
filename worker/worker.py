@@ -1065,19 +1065,35 @@ def _extract_post_date(item: dict) -> str:
     return ""
 
 
-def _date_fetch_limit(limit: int, has_range: bool) -> int:
+# Absolute safety ceiling for the date-window over-fetch (even at multiplier 5).
+DATE_RANGE_FETCH_HARD_CAP = 1000
+
+
+def _date_fetch_limit(limit: int, date_from: str = "", date_to: str = "",
+                      multiplier: float = 3.0) -> int:
     """
-    How many newest posts to pull when a date window is set. The actors return
-    newest-first with NO "before this date" cutoff (Apify/Instagram limitation),
-    so we over-fetch a MODERATE amount to give the date filter room without
-    scraping deep history. For an end date far in the past this may under-deliver
-    — that's an inherent Apify limit, raise the cap if you accept the credit cost.
+    How many newest posts to request when a date window is set.
+
+    The actors return newest-first, so to reach back to `date_from` for active
+    accounts we must over-fetch and then keep only the posts that land inside the
+    window. The USER controls how aggressively via `multiplier` (request
+    post-count × N). When `date_from` is set we also pass `onlyPostsNewerThan`,
+    which keeps real credit usage bounded by the window length server-side. The
+    multiplier is clamped to 1×–5× and a hard ceiling so a typo can't run away.
     """
-    return min(limit * 2 + 10, 80) if has_range else limit
+    if not (date_from or date_to):
+        return limit
+    try:
+        m = float(multiplier)
+    except (TypeError, ValueError):
+        m = 3.0
+    m = max(1.0, min(m, 5.0))
+    return max(limit, min(int(limit * m + 0.5), DATE_RANGE_FETCH_HARD_CAP))
 
 
 def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
-                     date_from: str = "", date_to: str = "") -> list:
+                     date_from: str = "", date_to: str = "",
+                     multiplier: float = 3.0) -> list:
     """
     Fetch Instagram profile content.
 
@@ -1134,7 +1150,7 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
 
     profile_url = f"https://www.instagram.com/{handle}/"
     has_range = bool(date_from or date_to)
-    fetch_limit = _date_fetch_limit(limit, has_range)  # over-fetch to reach the date window
+    fetch_limit = _date_fetch_limit(limit, date_from, date_to, multiplier)  # over-fetch to reach the date window
 
     def _apply_date_range(items: list) -> list:
         if not has_range:
@@ -1167,7 +1183,10 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
         if has_range:
             print(f"   IG Reels @{handle}: {len(filtered)} after date filter "
                   f"[{date_from or 'start'} → {date_to or 'now'}]")
-        return filtered[:limit]
+        # When a window is set, it governs the result set — keep everything
+        # in-window (already bounded by fetch_limit) so posts back to date_from
+        # aren't trimmed off; the limit only caps the no-date case.
+        return filtered if has_range else filtered[:limit]
 
     else:
         run_input = {
@@ -1184,7 +1203,7 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
         if has_range:
             print(f"   IG Profile @{handle}: {len(date_filtered)} after date filter "
                   f"[{date_from or 'start'} → {date_to or 'now'}]")
-        return date_filtered[:limit]
+        return date_filtered if has_range else date_filtered[:limit]
 
 
 def process_job(job):
@@ -1210,6 +1229,12 @@ def process_job(job):
     limit  = int(job.get("target_limit") or 50)
     # User-selected solo-retry passes for short handles (min 1, capped for safety).
     max_retries = max(1, min(int(job.get("max_retries") or 1), 10))
+    # User-set over-fetch multiplier for date-windowed scrapes (post-count × N).
+    # Clamped 1×–5×; defaults to 3× when unset/invalid.
+    try:
+        date_multiplier = max(1.0, min(float(job.get("date_multiplier") or 3.0), 5.0))
+    except (TypeError, ValueError):
+        date_multiplier = 3.0
     # Extract kol from kol_username or fall back to parsing the target_url
     # (original tab_extract.py stored "" when the user pasted a URL, not a @handle)
     _raw_kol = str(job.get("kol_username") or "").strip()
@@ -1350,7 +1375,7 @@ def process_job(job):
                 chunks = [all_handles[i:i+CHUNK_SIZE] for i in range(0, len(all_handles), CHUNK_SIZE)]
                 raw_data = []
                 # Oversample when filtering by date — some results will fall outside date_to
-                fetch_limit = _date_fetch_limit(limit, has_range)
+                fetch_limit = _date_fetch_limit(limit, date_from, date_to, date_multiplier)
                 for ci, chunk in enumerate(chunks, 1):
                     print(f"   📡 Stage 1 chunk {ci}/{len(chunks)}: {chunk}")
                     chunk_input = {
@@ -1381,7 +1406,7 @@ def process_job(job):
             elif is_ig:
                 # General scraper — can't batch, process only current handle
                 ig_url = f"https://www.instagram.com/{kol}/"
-                raw_data = _call_ig_profile(ig_url, fmt, limit, apikey, date_from=date_from, date_to=date_to)
+                raw_data = _call_ig_profile(ig_url, fmt, limit, apikey, date_from=date_from, date_to=date_to, multiplier=date_multiplier)
                 all_handles = [kol]
                 all_job_ids = [jid]
                 print(f"   📡 Stage 1: Apify returned {len(raw_data)} posts for @{kol}")
@@ -1470,7 +1495,7 @@ def process_job(job):
                         try:
                             retry = _call_ig_profile(
                                 f"https://www.instagram.com/{h}/", fmt, limit, apikey,
-                                date_from=date_from, date_to=date_to,
+                                date_from=date_from, date_to=date_to, multiplier=date_multiplier,
                             )
                         except Exception as e:
                             print(f"   ♻️ Retry @{h} errored: {str(e)[:120]}")
@@ -1494,9 +1519,13 @@ def process_job(job):
                         break
 
             # ── Stage 3: Build payloads and insert per handle ────────────────
+            # When a date window is set the window governs the result set, so keep
+            # all in-window posts (already bounded by the over-fetch) instead of
+            # trimming to `limit` — otherwise posts back toward date_from get cut.
             total_saved = 0
+            eff_limit = _date_fetch_limit(limit, date_from, date_to, date_multiplier) if (date_from or date_to) else limit
             for h in all_handles:
-                items = by_handle.get(h, [])[:limit]  # enforce limit per handle
+                items = by_handle.get(h, [])[:eff_limit]  # date window overrides limit
                 if is_ig:
                     payload = []
                     for d in items:
