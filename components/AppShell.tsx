@@ -44,7 +44,7 @@ const NAV: NavSection[] = [
       { href: "/url-stats",       label: "Video URL Scraper",   icon: Video,         color: "#f59e0b" },
       { href: "/profile-tracker", label: "Profile Scraper",     icon: User,          color: "#a78bfa" },
       { href: "/comments",        label: "Comment Sentiment",   icon: MessageSquare, color: "#f472b6" },
-      { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf", soon: true },
+      { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf" },
       { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c", soon: true },
     ],
   },
