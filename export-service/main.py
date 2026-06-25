@@ -101,6 +101,7 @@ class VideoStatsRequest(BaseModel):
     video_urls: list[str]
     platform: str
     calc_metrics: list[str] = []   # calculated metrics chosen at export time
+    raw_metrics: list[str] = []    # optional raw columns (Likes/Comments/Shares)
 
 
 class ProfileAuditRequest(BaseModel):
@@ -112,6 +113,7 @@ class ProfileAuditRequest(BaseModel):
     incl_bot5: bool = False
     limit: int = 0   # cap videos per creator to exactly this (0 = no cap)
     calc_metrics: list[str] = []   # user-selected calculated metrics (e.g. Engagement Rate)
+    raw_metrics: list[str] = []    # optional raw columns (Likes/Comments/Shares)
     rates: dict = {}               # per-KOL rate ($) for CPV, keyed by username
     date_from: str = ""            # chosen scrape window start (for the duration column)
     date_to: str = ""
@@ -134,7 +136,7 @@ def export_video_stats(req: VideoStatsRequest):
             detail="No video data found. The job may still be processing.",
         )
     df = pd.DataFrame(rows)
-    buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"), calc_metrics=req.calc_metrics)
+    buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"), calc_metrics=req.calc_metrics, raw_metrics=req.raw_metrics)
     platform_slug = req.platform.lower()
     return _xlsx_response(buf, f"video_stats_{platform_slug}.xlsx")
 
@@ -167,6 +169,7 @@ def export_profile_audit(req: ProfileAuditRequest):
         incl_bot5=req.incl_bot5,
         limit=req.limit,
         calc_metrics=req.calc_metrics,
+        raw_metrics=req.raw_metrics,
         rates=req.rates,
         date_from=req.date_from,
         date_to=req.date_to,

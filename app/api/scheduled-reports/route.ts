@@ -25,16 +25,26 @@ async function verifyProjectAccess(supabase: SB, projectId: string, userId: stri
 
 const FREQUENCIES = ["once", "daily", "weekly", "monthly"];
 
-/** Compute the first run time from a frequency (UTC). "once" => ~1 min from now. */
-function nextRun(frequency: string): string {
-  const d = new Date();
-  switch (frequency) {
-    case "daily":   d.setDate(d.getDate() + 1); break;
-    case "weekly":  d.setDate(d.getDate() + 7); break;
-    case "monthly": d.setMonth(d.getMonth() + 1); break;
-    default:        d.setMinutes(d.getMinutes() + 1); break; // once
+/**
+ * First run as a UTC ISO string, anchored to `sendTime` (HH:MM) in Indochina
+ * Time (UTC+7). Picks the next occurrence of that wall-clock time, then steps the
+ * cadence. ("once" fires at the next occurrence of the chosen time.)
+ */
+function nextRunICT(frequency: string, sendTime: string): string {
+  const [hRaw, mRaw] = (sendTime || "09:00").split(":").map((x) => parseInt(x, 10));
+  const h = Number.isFinite(hRaw) ? hRaw : 9;
+  const m = Number.isFinite(mRaw) ? mRaw : 0;
+  const now = new Date();
+  // ICT wall-clock expressed via a Date's UTC fields (now shifted +7h).
+  const nowICT = new Date(now.getTime() + 7 * 3600 * 1000);
+  const target = new Date(Date.UTC(nowICT.getUTCFullYear(), nowICT.getUTCMonth(), nowICT.getUTCDate(), h, m, 0, 0));
+  if (target.getTime() <= nowICT.getTime()) {
+    if (frequency === "weekly")       target.setUTCDate(target.getUTCDate() + 7);
+    else if (frequency === "monthly") target.setUTCMonth(target.getUTCMonth() + 1);
+    else                              target.setUTCDate(target.getUTCDate() + 1); // once / daily
   }
-  return d.toISOString();
+  // target's UTC fields hold the ICT wall-clock → real UTC instant is target − 7h.
+  return new Date(target.getTime() - 7 * 3600 * 1000).toISOString();
 }
 
 // ── GET — list schedules for a project ──────────────────────────────────────
@@ -73,6 +83,7 @@ export async function POST(request: NextRequest) {
     date_from?: string | null;
     date_to?: string | null;
     frequency?: string;
+    send_time?: string;
     rescrape?: boolean;
   } | null;
 
@@ -87,25 +98,29 @@ export async function POST(request: NextRequest) {
   }
 
   const frequency = FREQUENCIES.includes(body.frequency ?? "") ? body.frequency! : "once";
+  const sendTime  = /^\d{1,2}:\d{2}$/.test(body.send_time ?? "") ? body.send_time! : "09:00";
 
-  const { data, error } = await supabase
-    .from("scheduled_reports")
-    .insert({
-      project_id:      body.project_id,
-      created_by:      user.id,
-      recipient_email: email,
-      job_types:       body.job_types ?? [],
-      metrics:         body.metrics ?? [],
-      date_from:       body.date_from ?? null,
-      date_to:         body.date_to ?? null,
-      frequency,
-      rescrape:        !!body.rescrape,
-      active:          true,
-      next_run_at:     nextRun(frequency),
-    })
-    .select()
-    .single();
+  const row = {
+    project_id:      body.project_id,
+    created_by:      user.id,
+    recipient_email: email,
+    job_types:       body.job_types ?? [],
+    metrics:         body.metrics ?? [],
+    date_from:       body.date_from ?? null,
+    date_to:         body.date_to ?? null,
+    frequency,
+    rescrape:        !!body.rescrape,
+    active:          true,
+    send_time:       sendTime,
+    next_run_at:     nextRunICT(frequency, sendTime),
+  };
 
+  let { data, error } = await supabase.from("scheduled_reports").insert(row).select().single();
+  // Column-safe: if send_time hasn't been migrated yet, retry without it.
+  if (error && /send_time/i.test(error.message)) {
+    const { send_time: _st, ...rest } = row;
+    ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });
 }

@@ -214,7 +214,7 @@ def _widen(ws, spec: list[tuple[str, int]]):
 
 
 def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
-                               calc_metrics=None) -> io.BytesIO:
+                               calc_metrics=None, raw_metrics=None) -> io.BytesIO:
     from openpyxl.utils import get_column_letter
     df = df_raw.copy()
     df["Likes"]    = df["likes"].apply(_fmt)
@@ -243,9 +243,11 @@ def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
     for m in sel:
         df[m] = df.apply(lambda r, _m=m: _metric(r, _m), axis=1)
 
-    src_cols = ["username", "video_url", "Plays", "Likes", "Comments", "Shares"] + sel
+    _sel_raw = set(raw_metrics) if raw_metrics else {"Likes", "Comments", "Shares"}
+    raw_cols = [rc for rc in ("Likes", "Comments", "Shares") if rc in _sel_raw]
+    src_cols = ["username", "video_url", "Plays"] + raw_cols + sel
     out = df[src_cols].copy()
-    out.columns = ["Username", "Video URL", "Play Count", "Likes", "Comments", "Shares"] + sel
+    out.columns = ["Username", "Video URL", "Play Count"] + raw_cols + sel
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -271,6 +273,7 @@ def generate_profile_audit_excel(
     incl_bot5: bool = False,
     limit: int = 0,
     calc_metrics=None,
+    raw_metrics=None,
     rates=None,
     date_from: str = "",
     date_to: str = "",
@@ -354,6 +357,10 @@ def generate_profile_audit_excel(
         sel_calc = ["Engagement Rate"]   # sensible default so the sheet is never bare
     unsupported_calc = [m for m in (calc_metrics or [])
                         if m == "VTR" or (m == "CPV ($)" and not cpv_on)]
+
+    # Optional raw engagement columns (default all when unspecified).
+    _sel_raw = set(raw_metrics) if raw_metrics else {"Likes", "Comments", "Shares"}
+    raw_cols = [rc for rc in ("Likes", "Comments", "Shares") if rc in _sel_raw]
     scrape_range = (f"{date_from or 'start'} -> {date_to or 'now'}"
                     if (date_from or date_to) else "All time")
 
@@ -561,9 +568,8 @@ def generate_profile_audit_excel(
     # SHEET 2: Full Details — one row per video, all columns visible
     # ═══════════════════════════════════════════════════════════════════════════
     ws2 = wb.create_sheet("Video Details")
-    detail_headers = (["KOL / Creator", "Platform", "Video #", "Views",
-                       "Date Posted", "Likes", "Comments", "Shares"]
-                      + sel_calc
+    detail_headers = (["KOL / Creator", "Platform", "Video #", "Views", "Date Posted"]
+                      + raw_cols + sel_calc
                       + ["Scrape Range", "Sort Order", "Video URL"])
     ws2.append(detail_headers)
     for cell in ws2[1]:
@@ -583,8 +589,9 @@ def generate_profile_audit_excel(
             l = int(vrow.get("likes", 0) or 0)
             c = int(vrow.get("comments", 0) or 0)
             s = int(vrow.get("shares", 0) or 0)
-            row = [kol, platform_label, i, v,
-                   str(vrow.get("post_date", "") or "")[:10], l, c, s]
+            row = [kol, platform_label, i, v, str(vrow.get("post_date", "") or "")[:10]]
+            _raw_vals = {"Likes": l, "Comments": c, "Shares": s}
+            row += [_raw_vals[rc] for rc in raw_cols]
             for m in sel_calc:
                 if m == "CPV ($)":
                     _rate = rates_lower.get(str(kol).lower(), 0.0)

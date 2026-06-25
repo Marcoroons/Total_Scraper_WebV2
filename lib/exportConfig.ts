@@ -36,6 +36,7 @@ export interface ExportOptions {
   inclTop5?: boolean;
   inclBot5?: boolean;
   calcMetrics?: string[];            // calculated metrics chosen at export time
+  rawMetrics?: string[];             // optional raw columns (Likes/Comments/Shares)
   rates?: Record<string, number>;    // per-KOL rate ($) for CPV, keyed by username
 }
 
@@ -44,6 +45,7 @@ const DEFAULT_OPTS: Required<ExportOptions> = {
   inclTop5: true,
   inclBot5: false,
   calcMetrics: [],
+  rawMetrics: ["Likes", "Comments", "Shares"],
   rates: {},
 };
 
@@ -56,11 +58,12 @@ export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptio
       sort_by: o.sortBy, incl_top5: o.inclTop5, incl_bot5: o.inclBot5,
       limit: Number(job.target_limit) || 0,
       calc_metrics: o.calcMetrics.length ? o.calcMetrics : (job.calc_metrics ?? []),
+      raw_metrics: o.rawMetrics,
       rates: o.rates,
       date_from: job.date_from ?? "", date_to: job.date_to ?? "",
     };
   }
-  return { ...base, video_urls: [job.target_url], calc_metrics: o.calcMetrics };
+  return { ...base, video_urls: [job.target_url], calc_metrics: o.calcMetrics, raw_metrics: o.rawMetrics };
 }
 
 /**
@@ -87,11 +90,12 @@ export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: Exp
       // Metrics + rates are chosen at export time; fall back to the first job's
       // stored metrics for back-compat. Date window comes from the first job.
       calc_metrics: o.calcMetrics.length ? o.calcMetrics : (first.calc_metrics ?? []),
+      raw_metrics: o.rawMetrics,
       rates: o.rates,
       date_from: first.date_from ?? "", date_to: first.date_to ?? "",
     };
   }
-  return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean), calc_metrics: o.calcMetrics };
+  return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean), calc_metrics: o.calcMetrics, raw_metrics: o.rawMetrics };
 }
 
 export function exportFilename(job: Job) {

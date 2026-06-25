@@ -75,6 +75,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   // Metric selection — moved here from the scrape pages (the scrape captures all
   // raw data; you choose which calculated metrics + rates to show at export).
   const [calcMetrics, setCalcMetrics] = useState<string[]>(["Engagement Rate", "Applause Rate", "Virality Rate", "Comment/View Ratio"]);
+  const [rawMetrics, setRawMetrics] = useState<string[]>(["Likes", "Comments", "Shares"]);
   const [rates, setRates] = useState<Record<string, string>>({});
 
   // Export progress
@@ -84,6 +85,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   // Schedule email
   const [recipient,   setRecipient]   = useState("");
   const [frequency,   setFrequency]   = useState("once");
+  const [sendTime,    setSendTime]    = useState("09:00");
   const [rescrapeFirst, setRescrapeFirst] = useState(false);
   const [scheduling,  setScheduling]  = useState(false);
   const [scheduleMsg, setScheduleMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -215,6 +217,10 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   function toggleCalc(m: string) {
     setCalcMetrics((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
   }
+  const RAW_OPTIONS = ["Likes", "Comments", "Shares"];
+  function toggleRaw(m: string) {
+    setRawMetrics((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
+  }
 
   // ── Export + download — one compiled file per (type, platform) group ───────
   async function handleExportDownload() {
@@ -233,7 +239,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         const res = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rates: rateNums })),
+          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rawMetrics, rates: rateNums })),
         });
         if (!res.ok) { failures++; }
         else {
@@ -280,6 +286,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           date_from:       bounds ? new Date(bounds.from).toISOString() : null,
           date_to:         bounds ? new Date(bounds.to).toISOString() : null,
           frequency,
+          send_time:       sendTime,
           rescrape:        rescrapeFirst,
         }),
       });
@@ -287,7 +294,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
       if (!res.ok) { setScheduleMsg({ ok: false, text: (data as { error?: string }).error ?? "Failed to schedule." }); return; }
       setScheduleMsg({
         ok: true,
-        text: `Scheduled — ${frequency} to ${recipient.trim()}${rescrapeFirst ? " (with rescrape)" : ""}.`,
+        text: `Scheduled — ${frequency} at ${sendTime} ICT to ${recipient.trim()}${rescrapeFirst ? " (with rescrape)" : ""}.`,
       });
       setRecipient("");
     } catch {
@@ -439,6 +446,23 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               </label>
             </div>
 
+            {/* Raw columns — toggle which engagement columns appear */}
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Raw columns</label>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {RAW_OPTIONS.map((m) => {
+                const on = rawMetrics.includes(m);
+                return (
+                  <button key={m} type="button" onClick={() => toggleRaw(m)}
+                    className="px-2.5 py-1 rounded-full text-xs font-medium border transition-all"
+                    style={on
+                      ? { background: "rgba(167,139,250,0.14)", borderColor: "#a78bfa", color: "#a78bfa" }
+                      : { background: "transparent", borderColor: "rgba(255,255,255,0.1)", color: "#8899b0" }}>
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Calculated metrics — chosen at export, not at scrape time */}
             <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Calculated metrics</label>
             <div className="flex flex-wrap gap-1.5 mb-3">
@@ -510,6 +534,9 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               <option value="weekly">Weekly</option>
               <option value="monthly">Monthly</option>
             </select>
+
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Send time · Indochina (UTC+7)</label>
+            <input type="time" value={sendTime} onChange={(e) => setSendTime(e.target.value || "09:00")} className={`${selectCls} w-full mb-3`} />
 
             <button
               type="button"

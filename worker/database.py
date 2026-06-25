@@ -317,3 +317,18 @@ def mark_email_sent(supabase, email_id: str) -> None:
 
 def mark_email_failed(supabase, email_id: str) -> None:
     supabase.table("scheduled_emails").update({"status": "FAILED"}).eq("id", email_id).execute()
+
+
+# ── scheduled_reports (the Exporter's "Schedule email delivery") ─────────────
+def get_due_scheduled_reports(supabase, now_iso: str) -> list[dict]:
+    return (
+        supabase.table("scheduled_reports")
+        .select("*").eq("active", True).lte("next_run_at", now_iso)
+        .limit(1).execute().data or []
+    )
+
+
+def advance_scheduled_report(supabase, report_id: str,
+                             next_run_iso: str | None = None, deactivate: bool = False) -> None:
+    upd = {"active": False} if deactivate else {"next_run_at": next_run_iso}
+    supabase.table("scheduled_reports").update(upd).eq("id", report_id).execute()

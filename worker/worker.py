@@ -1819,6 +1819,88 @@ def process_automation(auto):
     except Exception as e:
         print(f"🚨 Automation {aid}: {e}")
 
+
+# ── Scheduled reports (Exporter "Schedule email delivery") ───────────────────
+ICT_TZ = datetime.timezone(datetime.timedelta(hours=7))  # Indochina Time (UTC+7)
+
+def _next_run_ict(frequency: str, send_time: str) -> str:
+    """Next UTC ISO instant for `send_time` (HH:MM, ICT) at the given cadence."""
+    try:
+        hh, mm = [int(x) for x in str(send_time or "09:00").split(":")[:2]]
+    except Exception:
+        hh, mm = 9, 0
+    now_ict = datetime.datetime.now(ICT_TZ)
+    target  = now_ict.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if target <= now_ict:
+        f = (frequency or "daily").lower()
+        if "week" in f:
+            target += datetime.timedelta(weeks=1)
+        elif "month" in f:
+            m = target.month % 12 + 1
+            y = target.year + (1 if target.month == 12 else 0)
+            target = target.replace(year=y, month=m)
+        else:  # daily / once
+            target += datetime.timedelta(days=1)
+    return target.astimezone(datetime.timezone.utc).isoformat()
+
+def process_scheduled_report(report):
+    rid       = report["id"]
+    pid       = report.get("project_id")
+    job_types = report.get("job_types") or []
+    recipient = (report.get("recipient_email") or "").strip()
+    freq      = (report.get("frequency") or "once").lower()
+    send_time = report.get("send_time") or "09:00"
+    print(f"\n📧 Scheduled report {rid} → {recipient} ({freq} @ {send_time} ICT)")
+    try:
+        import pandas as pd, io as _io
+        sheets = {}
+        for jt in job_types:
+            for plat in ("Instagram", "TikTok"):
+                jobs = db.get_project_jobs(supabase, pid, platform=plat, job_type=jt)
+                urls = list({j["target_url"] for j in jobs if j.get("target_url")})
+                df_e = pd.DataFrame()
+                if jt == "Specific URLs (Video Stats)" and urls:
+                    df_e = pd.DataFrame(db.get_campaign_videos(supabase, plat, urls))
+                elif jt == "Profile Feed (Audit)":
+                    names = [j.get("kol_username","") for j in jobs if j.get("kol_username")]
+                    if names:
+                        df_e = pd.DataFrame(db.get_influencer_profiles(supabase, plat, names))
+                elif jt == "Comments (Sentiment)" and urls:
+                    df_e = pd.DataFrame(db.get_comments(supabase, plat, urls))
+                if not df_e.empty:
+                    sheets[f"{jt.split(' ')[0]}_{plat}"[:31]] = df_e
+
+        if sheets and recipient:
+            buf = _io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                for name, df_e in sheets.items():
+                    df_e.to_excel(w, index=False, sheet_name=name)
+            buf.seek(0)
+            bot = os.environ.get("BOT_EMAIL","").strip()
+            msg = EmailMessage()
+            msg["Subject"] = "📊 Total Scraper — Scheduled Report"
+            msg["From"]    = f"Total Scraper <{bot}>"
+            msg["To"]      = recipient
+            msg.set_content("Your scheduled Total Scraper report is attached.")
+            msg.add_attachment(buf.read(), maintype="application",
+                               subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               filename="scheduled_report.xlsx")
+            dispatch_email(msg)
+            print(f"✅ Scheduled report {rid} sent ({len(sheets)} sheet(s)).")
+        else:
+            print(f"⚠️ Scheduled report {rid}: nothing to send (no data or no recipient).")
+    except Exception as e:
+        print(f"🚨 Scheduled report {rid}: {e}")
+
+    # Always advance/deactivate so a failure can't busy-loop the worker.
+    try:
+        if freq == "once":
+            db.advance_scheduled_report(supabase, rid, deactivate=True)
+        else:
+            db.advance_scheduled_report(supabase, rid, next_run_iso=_next_run_ict(freq, send_time))
+    except Exception as e:
+        print(f"🚨 Scheduled report {rid} advance failed: {e}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MULTI-LAYER DAILY COMPILER (Runs Once Per Day)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1945,7 +2027,10 @@ while True:
         
         autos = db.get_due_automations(supabase, now_iso)
         if autos: process_automation(autos[0]); continue
-        
+
+        reports = db.get_due_scheduled_reports(supabase, now_iso)
+        if reports: process_scheduled_report(reports[0]); continue
+
         if ENABLE_INTELLIGENCE:
             today = datetime.date.today()
             if os.environ.get("LAST_COMPILED_DATE") != today.isoformat():
