@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, Download, Loader2, Mail, RotateCcw, Send,
+  CheckCircle2, ChevronDown, Download, Loader2, Mail, RotateCcw, Send, SlidersHorizontal,
 } from "lucide-react";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import {
   EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS,
   buildBatchExportPayload, batchExportFilename, formatDateTime, type FunctionKey,
+  DEFAULT_LAYOUT, LAYOUT_PRESETS, type ExportLayout, type LayoutPreset, type SheetKey,
 } from "@/lib/exportConfig";
 import { CALC_METRICS } from "@/components/MetricsSelector";
 
@@ -77,6 +78,11 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   const [calcMetrics, setCalcMetrics] = useState<string[]>(["Engagement Rate", "Applause Rate", "Virality Rate", "Comment/View Ratio"]);
   const [rawMetrics, setRawMetrics] = useState<string[]>(["Likes", "Comments", "Shares"]);
   const [rates, setRates] = useState<Record<string, string>>({});
+
+  // Excel builder — which sheets/columns the profile-audit workbook contains.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [layoutPreset, setLayoutPreset] = useState<LayoutPreset>("detailed");
+  const [layout, setLayout] = useState<ExportLayout>(DEFAULT_LAYOUT);
 
   // Export progress
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
@@ -222,6 +228,33 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     setRawMetrics((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
   }
 
+  // ── Excel builder helpers ──────────────────────────────────────────────────
+  function applyPreset(p: Exclude<LayoutPreset, "custom">) {
+    setLayoutPreset(p);
+    setLayout(LAYOUT_PRESETS[p]);
+  }
+  function setSheetEnabled(key: SheetKey, on: boolean) {
+    setLayout((L) => ({ ...L, [key]: { ...L[key], enabled: on } }));
+    setLayoutPreset("custom");
+  }
+  function setSummaryCol(col: "images" | "dates" | "kpi" | "videos", on: boolean) {
+    setLayout((L) => ({ ...L, summary: { ...L.summary, [col]: on } }));
+    setLayoutPreset("custom");
+  }
+  function setDetailCol(col: "type" | "date" | "scrape_range" | "sort_order" | "url", on: boolean) {
+    setLayout((L) => ({ ...L, details: { ...L.details, [col]: on } }));
+    setLayoutPreset("custom");
+  }
+  const builderChip = (label: string, on: boolean, onClick: () => void) => (
+    <button type="button" onClick={onClick}
+      className="px-2.5 py-1 rounded-full text-xs font-medium border transition-all"
+      style={on
+        ? { background: "rgba(0,201,255,0.12)", borderColor: "#00c9ff", color: "#00c9ff" }
+        : { background: "transparent", borderColor: "rgba(255,255,255,0.1)", color: "#8899b0" }}>
+      {label}
+    </button>
+  );
+
   // ── Export + download — one compiled file per (type, platform) group ───────
   async function handleExportDownload() {
     if (exportGroups.length === 0) return;
@@ -239,7 +272,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         const res = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rawMetrics, rates: rateNums })),
+          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rawMetrics, rates: rateNums, layout })),
         });
         if (!res.ok) { failures++; }
         else {
@@ -495,6 +528,84 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 <p className="text-[11px] text-muted-foreground">CPV = rate ÷ views, per video. Leave a KOL blank to skip.</p>
               </div>
             )}
+
+            {/* ── Advanced export settings · Excel builder (profile-audit) ── */}
+            <div className="mb-4 rounded-lg border border-border overflow-hidden" style={{ background: "var(--input)" }}>
+              <button type="button" onClick={() => setAdvancedOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+                <span className="flex items-center gap-2">
+                  <SlidersHorizontal className="w-3.5 h-3.5" style={{ color: "#00c9ff" }} />
+                  <span className="text-xs font-medium text-foreground">Advanced export settings · Excel builder</span>
+                </span>
+                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              {advancedOpen && (
+                <div className="px-3 pb-3 pt-3 space-y-3 border-t border-border">
+                  {/* Presets */}
+                  <div>
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Preset</p>
+                    <div className="flex flex-wrap gap-1.5 items-center">
+                      {([["detailed", "Detailed"], ["compact", "Compact"], ["per_video", "Per-video"]] as const).map(([k, label]) =>
+                        builderChip(label, layoutPreset === k, () => applyPreset(k))
+                      )}
+                      {layoutPreset === "custom" && (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-medium border"
+                          style={{ borderColor: "#a78bfa", color: "#a78bfa", background: "rgba(167,139,250,0.12)" }}>Custom</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1.5">Per-video leads the file with the one-row-per-video sheet. Applies to profile-audit exports.</p>
+                  </div>
+
+                  {/* KOL Views sheet */}
+                  <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
+                    <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={layout.summary.enabled}
+                        onChange={(e) => setSheetEnabled("summary", e.target.checked)} />
+                      KOL Views sheet
+                    </label>
+                    {layout.summary.enabled && (
+                      <div className="flex flex-wrap gap-1.5 mt-2 pl-6">
+                        {builderChip("# Images", layout.summary.images, () => setSummaryCol("images", !layout.summary.images))}
+                        {builderChip("Most/Least dates", layout.summary.dates, () => setSummaryCol("dates", !layout.summary.dates))}
+                        {builderChip("KPI estimate", layout.summary.kpi, () => setSummaryCol("kpi", !layout.summary.kpi))}
+                        {builderChip("Per-video columns", layout.summary.videos, () => setSummaryCol("videos", !layout.summary.videos))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Video Details sheet */}
+                  <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
+                    <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={layout.details.enabled}
+                        onChange={(e) => setSheetEnabled("details", e.target.checked)} />
+                      Video Details sheet
+                    </label>
+                    {layout.details.enabled && (
+                      <>
+                        <div className="flex flex-wrap gap-1.5 mt-2 pl-6">
+                          {builderChip("Type", layout.details.type, () => setDetailCol("type", !layout.details.type))}
+                          {builderChip("Date posted", layout.details.date, () => setDetailCol("date", !layout.details.date))}
+                          {builderChip("Scrape range", layout.details.scrape_range, () => setDetailCol("scrape_range", !layout.details.scrape_range))}
+                          {builderChip("Sort order", layout.details.sort_order, () => setDetailCol("sort_order", !layout.details.sort_order))}
+                          {builderChip("Video URL", layout.details.url, () => setDetailCol("url", !layout.details.url))}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1.5 pl-6">Raw &amp; calculated metric columns are set by the pickers above.</p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Export Notes sheet */}
+                  <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
+                    <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={layout.notes.enabled}
+                        onChange={(e) => setSheetEnabled("notes", e.target.checked)} />
+                      Export Notes sheet
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <p className="text-xs text-muted-foreground mb-4">
               Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Pick the calculated metrics above (profile-audit exports).

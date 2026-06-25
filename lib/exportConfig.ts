@@ -31,6 +31,47 @@ export const DEFAULT_METRICS = [
   "Average Likes",  "Average Comments", "Content Categories",
 ];
 
+// ── Excel builder layout (profile-audit export) ─────────────────────────────
+// Drives which sheets/columns appear and in what order. An empty object on the
+// wire means the full default workbook (the export-service treats it that way).
+export type SheetKey = "summary" | "details" | "notes";
+
+export interface ExportLayout {
+  summary: { enabled: boolean; images: boolean; dates: boolean; kpi: boolean; videos: boolean };
+  details: { enabled: boolean; type: boolean; date: boolean; scrape_range: boolean; sort_order: boolean; url: boolean };
+  notes:   { enabled: boolean };
+  order:   SheetKey[];
+}
+
+export const DEFAULT_LAYOUT: ExportLayout = {
+  summary: { enabled: true, images: true, dates: true, kpi: true, videos: true },
+  details: { enabled: true, type: true, date: true, scrape_range: true, sort_order: true, url: true },
+  notes:   { enabled: true },
+  order:   ["summary", "details", "notes"],
+};
+
+export type LayoutPreset = "detailed" | "compact" | "per_video" | "custom";
+
+// Canned layouts. "custom" has no entry — it's whatever the user has toggled.
+export const LAYOUT_PRESETS: Record<Exclude<LayoutPreset, "custom">, ExportLayout> = {
+  // Everything — same as the historical default workbook.
+  detailed: DEFAULT_LAYOUT,
+  // A tight one-row-per-creator overview: summary only, no per-video grid.
+  compact: {
+    summary: { enabled: true, images: false, dates: false, kpi: true, videos: false },
+    details: { enabled: false, type: true, date: true, scrape_range: false, sort_order: false, url: true },
+    notes:   { enabled: false },
+    order:   ["summary", "details", "notes"],
+  },
+  // Lead with the per-video table; keep the summary + notes after it.
+  per_video: {
+    summary: { enabled: true, images: true, dates: true, kpi: true, videos: true },
+    details: { enabled: true, type: true, date: true, scrape_range: false, sort_order: false, url: true },
+    notes:   { enabled: true },
+    order:   ["details", "summary", "notes"],
+  },
+};
+
 export interface ExportOptions {
   sortBy?: string;       // "Most Recent" | "Oldest" | "Most Views" | "Least Views"
   inclTop5?: boolean;
@@ -38,6 +79,7 @@ export interface ExportOptions {
   calcMetrics?: string[];            // calculated metrics chosen at export time
   rawMetrics?: string[];             // optional raw columns (Likes/Comments/Shares)
   rates?: Record<string, number>;    // per-KOL rate ($) for CPV, keyed by username
+  layout?: ExportLayout;             // Excel builder layout (profile-audit only)
 }
 
 const DEFAULT_OPTS: Required<ExportOptions> = {
@@ -47,6 +89,7 @@ const DEFAULT_OPTS: Required<ExportOptions> = {
   calcMetrics: [],
   rawMetrics: ["Likes", "Comments", "Shares"],
   rates: {},
+  layout: DEFAULT_LAYOUT,
 };
 
 export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptions = {}) {
@@ -61,6 +104,7 @@ export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptio
       raw_metrics: o.rawMetrics,
       rates: o.rates,
       date_from: job.date_from ?? "", date_to: job.date_to ?? "",
+      layout: o.layout,
     };
   }
   return { ...base, video_urls: [job.target_url], calc_metrics: o.calcMetrics, raw_metrics: o.rawMetrics };
@@ -93,6 +137,7 @@ export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: Exp
       raw_metrics: o.rawMetrics,
       rates: o.rates,
       date_from: first.date_from ?? "", date_to: first.date_to ?? "",
+      layout: o.layout,
     };
   }
   return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean), calc_metrics: o.calcMetrics, raw_metrics: o.rawMetrics };

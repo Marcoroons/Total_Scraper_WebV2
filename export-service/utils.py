@@ -296,6 +296,7 @@ def generate_profile_audit_excel(
     date_from: str = "",
     date_to: str = "",
     requested_usernames=None,
+    layout: dict = None,
 ) -> io.BytesIO:
     """
     Compact Profile Feed (Audit) export.
@@ -369,6 +370,32 @@ def generate_profile_audit_excel(
         _is_video_row(ct, pc) for ct, pc in zip(df["content_type"], df["play_count"])
     ]
 
+    # ── Builder layout: which sheets/columns appear and in what order ───────────
+    # The Exporter's "Advanced export settings" sends this. An empty/missing layout
+    # means the full default workbook (all sheets, all columns) — so older callers
+    # and the scheduled-report path are unaffected.
+    _lay = layout if isinstance(layout, dict) else {}
+    def _sub(key):
+        v = _lay.get(key)
+        return v if isinstance(v, dict) else {}
+    _sum, _det, _nts = _sub("summary"), _sub("details"), _sub("notes")
+    def _flag(d, k):
+        v = d.get(k, True)
+        return True if v is None else bool(v)
+    sum_enabled = _flag(_sum, "enabled")
+    det_enabled = _flag(_det, "enabled")
+    nts_enabled = _flag(_nts, "enabled")
+    sum_images  = _flag(_sum, "images")
+    sum_dates   = _flag(_sum, "dates")
+    sum_kpi     = _flag(_sum, "kpi")
+    sum_videos  = _flag(_sum, "videos")
+    det_type    = _flag(_det, "type")
+    det_date    = _flag(_det, "date")
+    det_range   = _flag(_det, "scrape_range")
+    det_sort    = _flag(_det, "sort_order")
+    det_url     = _flag(_det, "url")
+    sheet_order = _lay.get("order") if isinstance(_lay.get("order"), list) else ["summary", "details", "notes"]
+
     # ── Calculated-metric columns for the Video Details sheet ───────────────────
     # Honour the metrics the user selected at scrape time. Only those derivable
     # from views/likes/comments/shares are computed here — VTR and CPV need a
@@ -430,6 +457,8 @@ def generate_profile_audit_excel(
     # than one scrape's worth of rows per creator; we only show `limit`).
     if limit and limit > 0:
         max_videos = min(max_videos, limit)
+    if not sum_videos:
+        max_videos = 0   # builder hid the per-video V1, V2… columns
 
     # ── Colour palette ────────────────────────────────────────────────────────
     NAVY   = "1B3A6B"; WHITE = "FFFFFF"; LBLUE = "EBF3FB"
@@ -455,12 +484,11 @@ def generate_profile_audit_excel(
     ws = wb.active
     ws.title = f"KOL Views ({platform_label})"
 
-    fixed_headers = [
-        "KOL / Creator", "Platform", "# Videos", "# Images",
-        "Avg Views", "Most Views", "Least Views",
-        "Date (Most Viewed)", "Date (Least Viewed)",
-        "KPI Est. Views (next video)",
-    ]
+    fixed_headers = ["KOL / Creator", "Platform", "# Videos"]
+    if sum_images: fixed_headers.append("# Images")
+    fixed_headers += ["Avg Views", "Most Views", "Least Views"]
+    if sum_dates:  fixed_headers += ["Date (Most Viewed)", "Date (Least Viewed)"]
+    if sum_kpi:    fixed_headers.append("KPI Est. Views (next video)")
     opt_headers = []
     if incl_top5: opt_headers += ["Top 5 Avg Views"]
     if incl_bot5: opt_headers += ["Bottom 5 Avg Views"]
@@ -519,7 +547,11 @@ def generate_profile_audit_excel(
         # defensible number for budget conversations. Rounded to the nearest 10,000.
         kpi_est = int(round(plays.median() / 10000.0)) * 10000 if n else 0
 
-        row_data = [kol, platform_label, n, n_images, avg_v, max_v, min_v, date_most, date_least, kpi_est]
+        row_data = [kol, platform_label, n]
+        if sum_images: row_data.append(n_images)
+        row_data += [avg_v, max_v, min_v]
+        if sum_dates:  row_data += [date_most, date_least]
+        if sum_kpi:    row_data.append(kpi_est)
         if incl_top5:
             top5 = vid_group.nlargest(5, "play_count")
             row_data.append(int(top5["play_count"].mean()) if len(top5) else 0)
@@ -527,12 +559,13 @@ def generate_profile_audit_excel(
             bot5 = vid_group.nsmallest(5, "play_count")
             row_data.append(int(bot5["play_count"].mean()) if len(bot5) else 0)
 
-        # Video cells: only the view count — URL and date go in the cell comment
-        for i, (_, vrow) in enumerate(vid_group.iterrows()):
-            row_data.append(int(vrow["play_count"]))
-        # Pad to max_videos
-        for _ in range(n, max_videos):
-            row_data.append(None)
+        if sum_videos:
+            # Video cells: only the view count — URL and date go in the cell comment
+            for i, (_, vrow) in enumerate(vid_group.iterrows()):
+                row_data.append(int(vrow["play_count"]))
+            # Pad to max_videos
+            for _ in range(n, max_videos):
+                row_data.append(None)
 
         ws.append(row_data)
 
@@ -601,22 +634,28 @@ def generate_profile_audit_excel(
 
     ws.freeze_panes = "B2"
 
-    # Note row at top explaining comments
-    ws.insert_rows(1)
-    note_cell = ws.cell(1, 1,
-        "💡 Hover over any V1, V2, V3… cell to see the video link, date posted, likes and comments.")
-    note_cell.font      = Font(italic=True, color="5B6A8A", size=8, name="Calibri")
-    note_cell.alignment = Alignment(horizontal="left", vertical="center")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=min(len(all_headers), 12))
-    ws.row_dimensions[1].height = 16
+    # Note row at top explaining comments (only meaningful when V-cells are shown)
+    if sum_videos:
+        ws.insert_rows(1)
+        note_cell = ws.cell(1, 1,
+            "💡 Hover over any V1, V2, V3… cell to see the video link, date posted, likes and comments.")
+        note_cell.font      = Font(italic=True, color="5B6A8A", size=8, name="Calibri")
+        note_cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=min(len(all_headers), 12))
+        ws.row_dimensions[1].height = 16
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SHEET 2: Full Details — one row per video, all columns visible
     # ═══════════════════════════════════════════════════════════════════════════
     ws2 = wb.create_sheet("Video Details")
-    detail_headers = (["KOL / Creator", "Platform", "Type", "Video #", "Views", "Date Posted"]
-                      + raw_cols + sel_calc
-                      + ["Scrape Range", "Sort Order", "Video URL"])
+    detail_headers = ["KOL / Creator", "Platform"]
+    if det_type: detail_headers.append("Type")
+    detail_headers += ["Video #", "Views"]
+    if det_date: detail_headers.append("Date Posted")
+    detail_headers += raw_cols + sel_calc
+    if det_range: detail_headers.append("Scrape Range")
+    if det_sort:  detail_headers.append("Sort Order")
+    if det_url:   detail_headers.append("Video URL")
     ws2.append(detail_headers)
     for cell in ws2[1]:
         cell.fill = fill(NAVY); cell.font = hfont(); cell.border = BORDER
@@ -641,8 +680,10 @@ def generate_profile_audit_excel(
             l = int(vrow.get("likes", 0) or 0)
             c = int(vrow.get("comments", 0) or 0)
             s = int(vrow.get("shares", 0) or 0)
-            row = [kol, platform_label, "Video" if is_vid else "Image", i, v,
-                   str(vrow.get("post_date", "") or "")[:10]]
+            row = [kol, platform_label]
+            if det_type: row.append("Video" if is_vid else "Image")
+            row += [i, v]
+            if det_date: row.append(str(vrow.get("post_date", "") or "")[:10])
             _raw_vals = {"Likes": l, "Comments": c, "Shares": s}
             row += [_raw_vals[rc] for rc in raw_cols]
             for m in sel_calc:
@@ -653,7 +694,9 @@ def generate_profile_audit_excel(
                     row.append(round(_rate / v, 4) if _rate else 0.0)
                 else:
                     row.append(round(_CALC_FORMULAS[m](v, l, c, s), 2))
-            row += [scrape_range, sort_by, str(vrow.get("post_url", "") or "")]
+            if det_range: row.append(scrape_range)
+            if det_sort:  row.append(sort_by)
+            if det_url:   row.append(str(vrow.get("post_url", "") or ""))
             ws2.append(row)
             bg = LBLUE if i % 2 == 0 else WHITE
             for col_idx, cell in enumerate(ws2[detail_row], 1):
@@ -760,6 +803,28 @@ def generate_profile_audit_excel(
         ws3.append([text])
         ws3.cell(ws3.max_row, 1).font = Font(bold=bold, size=9, name="Calibri")
     ws3.column_dimensions["A"].width = 110
+
+    # ── Apply the builder's sheet enable + order ────────────────────────────────
+    # All three sheets are built above; here we drop the disabled ones and reorder
+    # the rest. If the layout would leave nothing, the summary is kept so the file
+    # is never empty (openpyxl can't save a workbook with zero sheets).
+    _sheet_by_key = {"summary": ws, "details": ws2, "notes": ws3}
+    _enabled = {"summary": sum_enabled, "details": det_enabled, "notes": nts_enabled}
+    if not any(_enabled.values()):
+        _enabled["summary"] = True
+    for key, sheet in _sheet_by_key.items():
+        if not _enabled[key]:
+            wb.remove(sheet)
+    desired = []
+    for key in sheet_order:
+        sheet = _sheet_by_key.get(key)
+        if sheet is not None and _enabled.get(key) and sheet not in desired:
+            desired.append(sheet)
+    for sheet in list(wb.worksheets):          # append any not named in the order
+        if sheet not in desired:
+            desired.append(sheet)
+    wb._sheets = desired
+    wb.active = 0
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -117,6 +117,7 @@ class ProfileAuditRequest(BaseModel):
     rates: dict = {}               # per-KOL rate ($) for CPV, keyed by username
     date_from: str = ""            # chosen scrape window start (for the duration column)
     date_to: str = ""
+    layout: dict = {}              # builder layout: which sheets/columns + order
 
 
 class NLPRequest(BaseModel):
@@ -174,6 +175,7 @@ def export_profile_audit(req: ProfileAuditRequest):
         date_from=req.date_from,
         date_to=req.date_to,
         requested_usernames=req.usernames,
+        layout=req.layout,
     )
     platform_slug = req.platform.lower()
     return _xlsx_response(buf, f"profile_audit_{platform_slug}.xlsx")
