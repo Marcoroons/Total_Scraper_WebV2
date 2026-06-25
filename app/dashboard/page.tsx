@@ -13,11 +13,16 @@ import { useProject } from "@/lib/context/ProjectContext";
 // ─── Config ────────────────────────────────────────────────────────────────────
 
 const SCRAPE_TYPES = [
-  { key: "url",     label: "URL Scraper",     jobType: "Specific URLs (Video Stats)", color: "#f59e0b" },
-  { key: "profile", label: "Profile Scraper", jobType: "Profile Feed (Audit)",        color: "#a78bfa" },
+  { key: "url",     label: "URL Scraper",       jobType: "Specific URLs (Video Stats)", color: "#f59e0b" },
+  { key: "profile", label: "Profile Scraper",   jobType: "Profile Feed (Audit)",        color: "#a78bfa" },
+  { key: "comment", label: "Comment Sentiment", jobType: "Comments (Sentiment)",         color: "#f472b6" },
 ] as const;
 type ScrapeKey = (typeof SCRAPE_TYPES)[number]["key"];
 const DEFAULT_TYPES: ScrapeKey[] = ["url", "profile"];
+
+const SENT_COLOR = { positive: "#34d399", negative: "#f87171", neutral: "#5a7294" };
+interface VideoSentiment { video_url: string; influencer: string; total: number; positive: number; negative: number; neutral: number }
+interface Sentiment { total: number; positive: number; negative: number; neutral: number; byVideo: VideoSentiment[] }
 
 const PLATFORM_COLOR: Record<string, string> = { Instagram: "#f472b6", TikTok: "#00c9ff" };
 
@@ -119,6 +124,7 @@ export default function DashboardPage() {
   const [kols, setKols] = useState<KolAgg[]>([]);
   const [viewsByPlatform, setViewsByPlatform] = useState<Record<string, number>>({});
   const [completeness, setCompleteness] = useState<Completeness | null>(null);
+  const [sentiment, setSentiment] = useState<Sentiment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -142,6 +148,7 @@ export default function DashboardPage() {
       setKols(data.kols ?? []);
       setViewsByPlatform(data.viewsByPlatform ?? {});
       setCompleteness(data.completeness ?? null);
+      setSentiment(data.sentiment ?? null);
     } catch {
       setError("Network error loading dashboard.");
     } finally {
@@ -172,6 +179,15 @@ export default function DashboardPage() {
     : SCRAPE_TYPES.filter((t) => selectedTypes.includes(t.key)).map((t) => t.label.split(" ")[0]).join(", ");
 
   const hasData = totals.views > 0 || totals.likes > 0 || kols.length > 0;
+
+  const showEngagement = selectedTypes.includes("url") || selectedTypes.includes("profile");
+  const showSentiment  = selectedTypes.includes("comment");
+  const sentimentData = sentiment ? [
+    { name: "Positive", value: sentiment.positive, color: SENT_COLOR.positive },
+    { name: "Negative", value: sentiment.negative, color: SENT_COLOR.negative },
+    { name: "Neutral",  value: sentiment.neutral,  color: SENT_COLOR.neutral },
+  ] : [];
+  const positivePct = sentiment && sentiment.total ? Math.round((sentiment.positive / sentiment.total) * 100) : 0;
 
   return (
     <div className="space-y-5">
@@ -256,6 +272,8 @@ export default function DashboardPage() {
         <div className="rounded-2xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>{error}</div>
       ) : (
         <>
+          {showEngagement && (
+          <>
           {/* ROW 1 — metric KPIs */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {kpis.map((kpi) => {
@@ -411,6 +429,81 @@ export default function DashboardPage() {
               </table>
             )}
           </div>
+          </>
+          )}
+
+          {/* Comment Sentiment */}
+          {showSentiment && (
+            <div className="rounded-2xl border overflow-hidden" style={{ background: "#0d1829", borderColor: "rgba(255,255,255,0.07)" }}>
+              <div className="px-5 py-4">
+                <h2 className="text-sm font-semibold text-foreground" style={{ fontFamily: "Outfit, sans-serif" }}>Comment Sentiment</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {sentiment && sentiment.total > 0
+                    ? `${fmt(sentiment.total)} comments · keyword overview — the Comment export runs the full NLP pipeline`
+                    : "No analysed comments for these filters. Run a Comment (Sentiment) scrape first."}
+                </p>
+              </div>
+              {sentiment && sentiment.total > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 px-5 pb-5">
+                  <div className="rounded-xl border p-4" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+                    <div className="relative w-full" style={{ height: 168 }}>
+                      <ResponsiveContainer>
+                        <PieChart>
+                          <Pie data={sentimentData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={72} paddingAngle={3} strokeWidth={0}>
+                            {sentimentData.map((d) => <Cell key={d.name} fill={d.color} />)}
+                          </Pie>
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                        <span className="text-2xl font-bold" style={{ fontFamily: "Outfit, sans-serif", color: SENT_COLOR.positive }}>{positivePct}%</span>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">positive</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5 w-full mt-2">
+                      {sentimentData.map((d) => (
+                        <div key={d.name} className="flex items-center gap-2 text-xs">
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: d.color }} />
+                          <span className="flex-1 text-muted-foreground">{d.name}</span>
+                          <span className="text-foreground font-medium">{fmt(d.value)}</span>
+                          <span className="text-muted-foreground w-10 text-right">{sentiment.total ? Math.round((d.value / sentiment.total) * 100) : 0}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="lg:col-span-2 rounded-xl border p-4" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">By video — sentiment mix</p>
+                    <div className="space-y-2.5 max-h-[220px] overflow-y-auto">
+                      {sentiment.byVideo.slice(0, 12).map((v) => {
+                        const p  = v.total ? (v.positive / v.total) * 100 : 0;
+                        const nu = v.total ? (v.neutral  / v.total) * 100 : 0;
+                        const ng = v.total ? (v.negative / v.total) * 100 : 0;
+                        return (
+                          <div key={v.video_url} className="flex items-center gap-3">
+                            <a href={v.video_url} target="_blank" rel="noopener noreferrer" className="text-xs text-foreground truncate flex-1 hover:underline" title={v.video_url}>
+                              {v.influencer ? `@${v.influencer}` : v.video_url}
+                            </a>
+                            <span className="text-[11px] text-muted-foreground w-14 text-right flex-shrink-0">{v.total} cmt</span>
+                            <div className="w-40 h-2.5 rounded-full overflow-hidden flex flex-shrink-0">
+                              <div style={{ width: `${p}%`,  background: SENT_COLOR.positive }} />
+                              <div style={{ width: `${nu}%`, background: SENT_COLOR.neutral }} />
+                              <div style={{ width: `${ng}%`, background: SENT_COLOR.negative }} />
+                            </div>
+                            <span className="text-[11px] font-medium w-10 text-right flex-shrink-0" style={{ color: SENT_COLOR.positive }}>{Math.round(p)}%</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!showEngagement && !showSentiment && (
+            <div className="rounded-2xl border p-12 text-center text-sm text-muted-foreground" style={{ background: "#0d1829", borderColor: "rgba(255,255,255,0.07)" }}>
+              Pick a scraper type in the Scrapers filter to view analytics.
+            </div>
+          )}
         </>
       )}
     </div>

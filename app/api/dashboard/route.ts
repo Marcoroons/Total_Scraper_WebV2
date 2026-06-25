@@ -36,6 +36,28 @@ async function verifyProjectAccess(supabase: SB, projectId: string, userId: stri
 
 const COLUMNS = "job_id, target_url, platform, job_type, kol_username, target_limit, status, created_at";
 
+// Lightweight keyword sentiment (mirrors the NLP engine's base dictionaries) for a
+// dashboard overview. The Comment export still runs the full NLP pipeline.
+const POS_WORDS = new Set("enak mantap suka nagih borong segar seger halal asli murah bagus cocok sip boleh rekomendasi rekomen love good best fresh tasty delicious yummy worth amazing awesome nice perfect favorite favourite recommend like happy happier great excellent fantastic wonderful obsessed cool enjoy enjoyed superb brilliant glad addictive kesukaan mewah nikmat kriuk kumplit nostalgia booster cinta juara".split(" "));
+const NEG_WORDS = new Set("mahal kecewa asem kecut aneh bosen kurang cair eneg pusing zonk boong jelek basi bad expensive pricey overpriced awful terrible disgusting sour hate boring worst sad mad angry upset".split(" "));
+const NEGATIONS = new Set("tidak bukan jangan belum ga gak gk engga nggak ngga ngk tdk no not".split(" "));
+const POS_EMOJI = ["❤️", "💖", "🔥", "👍", "😋", "😍", "👏", "🤤", "🥛", "💯", "✨"];
+const NEG_EMOJI = ["🤮", "💩", "😡", "👎", "😒", "🤡", "💀", "🤢", "🗿"];
+
+type Sent = "positive" | "negative" | "neutral";
+function classifySentiment(text: string): Sent {
+  const words = (text || "").toLowerCase().split(/[^a-zÀ-ɏ]+/).filter(Boolean);
+  let pos = words.filter((w) => POS_WORDS.has(w)).length;
+  let neg = words.filter((w) => NEG_WORDS.has(w)).length;
+  for (const e of POS_EMOJI) if (text.includes(e)) pos++;
+  for (const e of NEG_EMOJI) if (text.includes(e)) neg++;
+  const negated = words.some((w) => NEGATIONS.has(w));
+  if (negated && pos > 0 && neg === 0) return "negative"; // e.g. "ga enak"
+  if (pos > neg) return "positive";
+  if (neg > pos) return "negative";
+  return "neutral";
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -183,5 +205,41 @@ export async function GET(request: NextRequest) {
     failureRate: profileTotal > 0 ? (failures / profileTotal) * 100 : 0,
   };
 
-  return NextResponse.json({ jobs: jobs ?? [], prevTotal, totals, kols, viewsByPlatform, completeness });
+  // ── Comment sentiment overview (only when Comments (Sentiment) is requested) ──
+  let sentiment: {
+    total: number; positive: number; negative: number; neutral: number;
+    byVideo: { video_url: string; influencer: string; total: number; positive: number; negative: number; neutral: number }[];
+  } | null = null;
+
+  if (types.includes("Comments (Sentiment)")) {
+    const commentJobs = (jobs ?? []).filter(
+      (j) => j.status === "COMPLETED" && j.job_type === "Comments (Sentiment)" && j.target_url
+    );
+    const urlsByPlatform: Record<string, Set<string>> = {};
+    for (const j of commentJobs) (urlsByPlatform[j.platform] ??= new Set()).add(j.target_url);
+
+    const tot = { total: 0, positive: 0, negative: 0, neutral: 0 };
+    const byVideo = new Map<string, { video_url: string; influencer: string; total: number; positive: number; negative: number; neutral: number }>();
+
+    for (const platform of Object.keys(urlsByPlatform)) {
+      const urls = Array.from(urlsByPlatform[platform]);
+      if (urls.length === 0) continue;
+      const { data } = await supabase
+        .from(`${pfx(platform)}_comments`)
+        .select("video_url, influencer_username, comment_text")
+        .in("video_url", urls)
+        .limit(10000);
+      for (const row of (data ?? []) as { video_url?: string; influencer_username?: string; comment_text?: string }[]) {
+        const s = classifySentiment(String(row.comment_text ?? ""));
+        tot.total++; tot[s]++;
+        const key = String(row.video_url ?? "");
+        const v = byVideo.get(key) ?? { video_url: key, influencer: String(row.influencer_username ?? ""), total: 0, positive: 0, negative: 0, neutral: 0 };
+        v.total++; v[s]++;
+        byVideo.set(key, v);
+      }
+    }
+    sentiment = { ...tot, byVideo: Array.from(byVideo.values()).sort((a, b) => b.total - a.total) };
+  }
+
+  return NextResponse.json({ jobs: jobs ?? [], prevTotal, totals, kols, viewsByPlatform, completeness, sentiment });
 }
