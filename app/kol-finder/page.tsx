@@ -65,6 +65,7 @@ export default function KolFinderPage() {
   const [minPosts, setMinPosts] = useState(1);
   const [known,    setKnown]    = useState<KnownMap>({});
   const [hideKnown, setHideKnown] = useState(false);
+  const [hashtagFilter, setHashtagFilter] = useState("");
 
   const loadResults = useCallback(async () => {
     if (!activeProjectId) { setRows([]); return; }
@@ -79,11 +80,29 @@ export default function KolFinderPage() {
 
   useEffect(() => { loadResults(); }, [loadResults]);
 
+  // Distinct hashtags present in the scraped data for this platform. Auto-grows
+  // as the user scrapes more hashtags — feeds the filter dropdown.
+  const availableHashtags = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      if (r.platform !== platform) continue;
+      for (const t of (r.search_target || "").split(",")) {
+        const tag = t.replace(/#/g, "").trim();
+        if (tag) set.add(tag);
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [rows, platform]);
+
   // ── Aggregate hashtag-scrape authors into a ranked outreach roster ──
   // No follower counts exist for hashtag scrapes, so "outreach" is derived
   // from demonstrated reach + engagement + how often a creator surfaces.
   const roster = useMemo<Kol[]>(() => {
-    const filtered = rows.filter((r) => r.platform === platform && r.username);
+    const filtered = rows.filter((r) =>
+      r.platform === platform && r.username &&
+      (hashtagFilter === "" ||
+        (r.search_target || "").split(",").some((t) => t.replace(/#/g, "").trim() === hashtagFilter))
+    );
     if (filtered.length === 0) return [];
 
     type Acc = {
@@ -123,7 +142,7 @@ export default function KolFinderPage() {
       ...k,
       score: Math.round(100 * (0.5 * (k.reach / maxReach) + 0.3 * (k.er / maxEr) + 0.2 * (k.posts / maxPosts))),
     }));
-  }, [rows, platform]);
+  }, [rows, platform, hashtagFilter]);
 
   // Look up which roster creators we've already scraped, across all projects/teams.
   useEffect(() => {
@@ -227,7 +246,7 @@ export default function KolFinderPage() {
         <div className="space-y-4">
           <div className={`${cardCls} p-5 space-y-3`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
-            <PlatformToggle value={platform} onChange={(p) => setPlatform(p as Platform)} />
+            <PlatformToggle value={platform} onChange={(p) => { setPlatform(p as Platform); setHashtagFilter(""); }} />
           </div>
           <div className={`${cardCls} p-5 space-y-2`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtags to mine for creators</p>
@@ -268,8 +287,14 @@ export default function KolFinderPage() {
         {/* ── Ranked roster ── */}
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rank by</span>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtag</span>
+              <select value={hashtagFilter} onChange={(e) => setHashtagFilter(e.target.value)}
+                className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring max-w-[170px]">
+                <option value="">All hashtags{availableHashtags.length ? ` (${availableHashtags.length})` : ""}</option>
+                {availableHashtags.map((h) => <option key={h} value={h}>#{h}</option>)}
+              </select>
+              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Rank by</span>
               <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
                 className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
                 {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
