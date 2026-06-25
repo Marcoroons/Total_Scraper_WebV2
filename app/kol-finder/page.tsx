@@ -253,8 +253,22 @@ export default function KolFinderPage() {
             <textarea value={tags} onChange={(e) => setTags(e.target.value)} rows={4}
               placeholder="one per line or comma-separated&#10;e.g. yogurt, healthysnack, fyp"
               className="w-full px-3 py-2 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-y" />
-            <p className="text-xs text-muted-foreground">The # is optional — we strip it.</p>
+            <p className="text-xs text-muted-foreground">The # is optional — we strip it. <span className="text-foreground">Tip:</span> Indonesia-centric tags (susu sapi, susu segar, yogurt) surface local creators.</p>
           </div>
+          {/* Region note — TikTok is locked to Indonesia; Instagram can't be */}
+          {platform === "Instagram" ? (
+            <div className="rounded-xl p-4" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)" }}>
+              <p className="text-xs" style={{ color: "#f59e0b" }}>
+                ⚠️ Instagram hashtags are global — results can&apos;t be locked to Indonesia. Use Indonesia-specific hashtags (e.g. <span className="font-medium">susu sapi, susu segar, yogurt</span>) to keep creators local.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-xl p-4" style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>
+              <p className="text-xs" style={{ color: "#10b981" }}>
+                🌏 TikTok results are locked to Indonesia (creators in region ID only).
+              </p>
+            </div>
+          )}
           <div className={`${cardCls} p-5 space-y-2`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Posts per hashtag</p>
             <input type="number" min={1} max={200} value={limit}

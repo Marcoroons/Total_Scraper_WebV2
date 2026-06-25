@@ -1292,7 +1292,26 @@ def process_job(job):
                             "audio_track":(d.get("audioTrack") or {}).get("name","Original Audio"),
                             "content_type":d.get("type","Video")} for d in data if d.get("url")]
             else:
-                data = call_apify(actors["hashtag"],{"hashtags":tags,"resultsPerPage":limit},apikey)
+                # Region-lock TikTok to Indonesia: scrape through an ID residential
+                # proxy (biases TikTok's results to ID at the source), over-fetch,
+                # then keep only creators whose authorMeta.region is ID. If the actor
+                # returns no region field at all, fall back to the ID-proxied set so
+                # the scrape never silently comes back empty.
+                tt_fetch = min(limit * 3, 200)
+                raw_tt = call_apify(actors["hashtag"], {
+                    "hashtags": tags, "resultsPerPage": tt_fetch,
+                    "proxyConfiguration": {"useApifyProxy": True,
+                                           "apifyProxyGroups": ["RESIDENTIAL"],
+                                           "apifyProxyCountry": "ID"},
+                }, apikey)
+                id_only = [d for d in raw_tt
+                           if str((d.get("authorMeta") or {}).get("region") or "").upper() == "ID"]
+                if id_only:
+                    data = id_only[:limit]
+                    print(f"   🌏 TikTok region-lock ID: kept {len(id_only)}/{len(raw_tt)} posts")
+                else:
+                    data = raw_tt[:limit]
+                    print(f"   🌏 TikTok region-lock ID: actor returned no region field — using ID-proxied results ({len(raw_tt)})")
                 payload = [{"project_id":pid,"platform":plat,"search_target":target,
                             "video_url":d.get("webVideoUrl") or d.get("videoUrl"),
                             "username":(d.get("authorMeta") or {}).get("name"),
