@@ -5,7 +5,6 @@ import { Plus, X } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type JobPayload } from "@/lib/hooks/useJobs";
 import { PlatformToggle } from "@/components/PlatformToggle";
-import { MetricsSelector } from "@/components/MetricsSelector";
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
 type Platform = "Instagram" | "TikTok";
@@ -110,8 +109,6 @@ export default function ProfileTrackerPage() {
   const [dateFrom,    setDateFrom]    = useState("");
   const [dateTo,      setDateTo]      = useState("");
   const [dateMultiplier, setDateMultiplier] = useState(3);
-  const [rawMetrics,  setRawMetrics]  = useState<string[]>([]);
-  const [calcMetrics, setCalcMetrics] = useState<string[]>([]);
   const [profiles,    setProfiles]    = useState<string[]>([""]);
   const [apifyKey,    setApifyKey]    = useState("");
   const [errors,      setErrors]      = useState<string[]>([]);
@@ -130,7 +127,6 @@ export default function ProfileTrackerPage() {
     if (!isTikTok && !format) errs.push("Content type not selected (choose Reels Only, All Formats, or Images/Carousel Only).");
     const filled = profiles.filter((p) => p.trim());
     if (filled.length === 0) errs.push("No profiles entered — add at least one URL or @handle.");
-    if (rawMetrics.length === 0 && calcMetrics.length === 0) errs.push("No metrics selected — pick at least one raw or calculated metric.");
     if (dateInvalid) errs.push("Date range invalid — start date is after end date.");
     if (startMode === "specific" && !dateFrom) errs.push("Start is set to 'Specific date' but no start date was entered.");
     if (endMode === "specific" && !dateTo) errs.push("End is set to 'Specific date' but no end date was entered.");
@@ -162,8 +158,8 @@ export default function ProfileTrackerPage() {
         job_type:      "Profile Feed (Audit)",
         kol_username:  handle,
         rate:          "",
-        raw_metrics:   rawMetrics,
-        calc_metrics:  calcMetrics,
+        raw_metrics:   [],
+        calc_metrics:  [],
         format_filter: isTikTok ? "All Formats" : format,
         target_limit:  postLimit,
         max_retries:   retries,
@@ -212,8 +208,6 @@ export default function ProfileTrackerPage() {
             onChange={(p) => {
               setPlatform(p as Platform);
               setFormat("");
-              setRawMetrics([]);
-              setCalcMetrics([]);
             }}
           />
         </div>
@@ -378,19 +372,12 @@ export default function ProfileTrackerPage() {
           )}
         </div>
 
-        {/* Metrics */}
-        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            Metrics to include in export <span className="text-red-400">*</span>
+        {/* Metrics note — selection moved to export */}
+        <div className="bg-card border border-border rounded-xl p-5">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Metrics</p>
+          <p className="text-xs text-muted-foreground">
+            Every metric (views, likes, comments, shares, dates) is captured on each scrape. Choose which columns and calculated metrics to include — and enter rates for CPV — at <span className="text-foreground">export time</span> in <a href="/queue" className="underline">Queue &amp; Export → Exporter</a>, so you can re-export different views without re-scraping.
           </p>
-          <MetricsSelector
-            platform={platform}
-            rawSelected={rawMetrics}
-            calcSelected={calcMetrics}
-            onRawChange={setRawMetrics}
-            onCalcChange={setCalcMetrics}
-            accentColor={ACCENT}
-          />
         </div>
 
         {/* Profiles */}
@@ -413,7 +400,6 @@ export default function ProfileTrackerPage() {
             .map((raw) => ({ raw: raw.trim(), handle: extractHandle(raw, platform) }))
             .filter((r) => r.raw);
           if (previewRows.length === 0) return null;
-          const metricCount = rawMetrics.length + calcMetrics.length;
           return (
             <div className="bg-card border border-border rounded-xl p-5 space-y-3" style={{ borderColor: `${ACCENT}33` }}>
               <p className="text-[10px] font-mono uppercase tracking-wider" style={{ color: ACCENT }}>
@@ -429,7 +415,6 @@ export default function ProfileTrackerPage() {
                 {(startMode === "specific" || endMode === "specific") && (
                   <div><span className="text-muted-foreground">Date over-fetch: </span><span className="text-foreground font-medium">{dateMultiplier}×</span></div>
                 )}
-                <div><span className="text-muted-foreground">Metrics: </span><span className="text-foreground font-medium">{metricCount} selected</span></div>
                 <div><span className="text-muted-foreground">Profiles: </span><span className="text-foreground font-medium">{previewRows.length}</span></div>
               </div>
 

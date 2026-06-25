@@ -256,6 +256,7 @@ def generate_profile_audit_excel(
     incl_bot5: bool = False,
     limit: int = 0,
     calc_metrics=None,
+    rates=None,
     date_from: str = "",
     date_to: str = "",
     requested_usernames=None,
@@ -321,10 +322,23 @@ def generate_profile_audit_excel(
         "Virality Rate":      lambda v, l, c, s: (s / v * 100) if v else 0.0,
         "Comment/View Ratio": lambda v, l, c, s: (c / v * 100) if v else 0.0,
     }
+    # CPV ($) = rate / views per video. Computable only when per-KOL rates were
+    # supplied at export time; otherwise it's listed as unavailable.
+    rates_lower = {}
+    for _k, _v in (rates or {}).items():
+        try:
+            rates_lower[str(_k).lower()] = float(_v)
+        except (TypeError, ValueError):
+            pass
+    cpv_on = ("CPV ($)" in (calc_metrics or [])) and len(rates_lower) > 0
+
     sel_calc = [m for m in (calc_metrics or []) if m in _CALC_FORMULAS]
+    if cpv_on:
+        sel_calc = sel_calc + ["CPV ($)"]
     if not sel_calc:
         sel_calc = ["Engagement Rate"]   # sensible default so the sheet is never bare
-    unsupported_calc = [m for m in (calc_metrics or []) if m in ("VTR", "CPV ($)")]
+    unsupported_calc = [m for m in (calc_metrics or [])
+                        if m == "VTR" or (m == "CPV ($)" and not cpv_on)]
     scrape_range = (f"{date_from or 'start'} -> {date_to or 'now'}"
                     if (date_from or date_to) else "All time")
 
@@ -556,7 +570,12 @@ def generate_profile_audit_excel(
             s = int(vrow.get("shares", 0) or 0)
             row = [kol, platform_label, i, v,
                    str(vrow.get("post_date", "") or "")[:10], l, c, s]
-            row += [round(_CALC_FORMULAS[m](v, l, c, s), 2) for m in sel_calc]
+            for m in sel_calc:
+                if m == "CPV ($)":
+                    _rate = rates_lower.get(str(kol).lower(), 0.0)
+                    row.append(round(_rate / v, 4) if (_rate and v) else 0.0)
+                else:
+                    row.append(round(_CALC_FORMULAS[m](v, l, c, s), 2))
             row += [scrape_range, sort_by, str(vrow.get("post_url", "") or "")]
             ws2.append(row)
             bg = LBLUE if i % 2 == 0 else WHITE
@@ -564,7 +583,9 @@ def generate_profile_audit_excel(
                 cell.fill = fill(bg); cell.border = BORDER; cell.font = cell_font()
                 hdr = detail_headers[col_idx - 1]
                 cell.alignment = align("left" if hdr in left_cols else "center")
-                if hdr in sel_calc:
+                if hdr == "CPV ($)":
+                    cell.number_format = '"$"0.0000'
+                elif hdr in sel_calc:
                     cell.number_format = '0.00"%"'
                 elif isinstance(cell.value, int):
                     cell.number_format = "#,##0"
@@ -609,6 +630,7 @@ def generate_profile_audit_excel(
         "Applause Rate":      "Likes / Views x 100%",
         "Virality Rate":      "Shares / Views x 100%",
         "Comment/View Ratio": "Comments / Views x 100%",
+        "CPV ($)":            "Rate ($) / Views, per video",
     }
     notes += [("", False), ("CALCULATED METRICS (Video Details sheet)", True)]
     for m in sel_calc:

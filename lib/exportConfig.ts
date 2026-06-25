@@ -35,12 +35,16 @@ export interface ExportOptions {
   sortBy?: string;       // "Most Recent" | "Oldest" | "Most Views" | "Least Views"
   inclTop5?: boolean;
   inclBot5?: boolean;
+  calcMetrics?: string[];            // calculated metrics chosen at export time
+  rates?: Record<string, number>;    // per-KOL rate ($) for CPV, keyed by username
 }
 
 const DEFAULT_OPTS: Required<ExportOptions> = {
   sortBy: "Most Recent",
   inclTop5: true,
   inclBot5: false,
+  calcMetrics: [],
+  rates: {},
 };
 
 export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptions = {}) {
@@ -51,7 +55,8 @@ export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptio
       ...base, usernames: [job.kol_username].filter(Boolean),
       sort_by: o.sortBy, incl_top5: o.inclTop5, incl_bot5: o.inclBot5,
       limit: Number(job.target_limit) || 0,
-      calc_metrics: job.calc_metrics ?? [],
+      calc_metrics: o.calcMetrics.length ? o.calcMetrics : (job.calc_metrics ?? []),
+      rates: o.rates,
       date_from: job.date_from ?? "", date_to: job.date_to ?? "",
     };
   }
@@ -79,8 +84,10 @@ export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: Exp
       incl_bot5: o.inclBot5,
       // Cap to the largest requested limit in the batch (each job's posts-per-profile).
       limit: Math.max(0, ...jobs.map((j) => Number(j.target_limit) || 0)),
-      // Metrics/date window come from the first job (a batch shares one scrape config).
-      calc_metrics: first.calc_metrics ?? [],
+      // Metrics + rates are chosen at export time; fall back to the first job's
+      // stored metrics for back-compat. Date window comes from the first job.
+      calc_metrics: o.calcMetrics.length ? o.calcMetrics : (first.calc_metrics ?? []),
+      rates: o.rates,
       date_from: first.date_from ?? "", date_to: first.date_to ?? "",
     };
   }

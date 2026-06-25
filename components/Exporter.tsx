@@ -9,6 +9,7 @@ import {
   EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS,
   buildBatchExportPayload, batchExportFilename, formatDateTime, type FunctionKey,
 } from "@/lib/exportConfig";
+import { CALC_METRICS } from "@/components/MetricsSelector";
 
 // ─── Date range presets ───────────────────────────────────────────────────────
 
@@ -70,6 +71,11 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   const [sortBy,    setSortBy]    = useState("Most Recent");
   const [inclTop5,  setInclTop5]  = useState(true);
   const [inclBot5,  setInclBot5]  = useState(false);
+
+  // Metric selection — moved here from the scrape pages (the scrape captures all
+  // raw data; you choose which calculated metrics + rates to show at export).
+  const [calcMetrics, setCalcMetrics] = useState<string[]>(["Engagement Rate", "Applause Rate", "Virality Rate", "Comment/View Ratio"]);
+  const [rates, setRates] = useState<Record<string, string>>({});
 
   // Export progress
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
@@ -183,9 +189,38 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     );
   }, [exportableSelected]);
 
+  // ── Metric picker derived state ───────────────────────────────────────────
+  const selectedPlatforms = useMemo(
+    () => Array.from(new Set(exportableSelected.map((j) => j.platform))),
+    [exportableSelected]
+  );
+  const availableCalc = useMemo(() => {
+    const set = new Set<string>();
+    const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
+    for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) set.add(m);
+    return Array.from(set);
+  }, [selectedPlatforms]);
+  const profileKols = useMemo(
+    () => Array.from(new Set(
+      exportableSelected
+        .filter((j) => j.job_type === "Profile Feed (Audit)" && j.kol_username)
+        .map((j) => j.kol_username)
+    )),
+    [exportableSelected]
+  );
+  const cpvOn = calcMetrics.includes("CPV ($)");
+  function toggleCalc(m: string) {
+    setCalcMetrics((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
+  }
+
   // ── Export + download — one compiled file per (type, platform) group ───────
   async function handleExportDownload() {
     if (exportGroups.length === 0) return;
+    const rateNums: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rates)) {
+      const n = parseFloat(v);
+      if (Number.isFinite(n) && n > 0) rateNums[k] = n;
+    }
     setExporting({ done: 0, total: exportGroups.length });
     let failures = 0;
     for (let i = 0; i < exportGroups.length; i++) {
@@ -195,7 +230,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         const res = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5 })),
+          body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rates: rateNums })),
         });
         if (!res.ok) { failures++; }
         else {
@@ -401,8 +436,41 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               </label>
             </div>
 
+            {/* Calculated metrics — chosen at export, not at scrape time */}
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Calculated metrics</label>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {availableCalc.map((m) => {
+                const on = calcMetrics.includes(m);
+                return (
+                  <button key={m} type="button" onClick={() => toggleCalc(m)}
+                    className="px-2.5 py-1 rounded-full text-xs font-medium border transition-all"
+                    style={on
+                      ? { background: "rgba(0,201,255,0.12)", borderColor: "#00c9ff", color: "#00c9ff" }
+                      : { background: "transparent", borderColor: "rgba(255,255,255,0.1)", color: "#8899b0" }}>
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+
+            {cpvOn && profileKols.length > 0 && (
+              <div className="mb-3 rounded-lg border border-border p-3 space-y-2" style={{ background: "var(--input)" }}>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Rate ($) per KOL — for CPV</p>
+                {profileKols.map((k) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <span className="text-xs text-foreground flex-1 truncate">@{k}</span>
+                    <input type="number" min={0} step="0.01" value={rates[k] ?? ""}
+                      onChange={(e) => setRates((r) => ({ ...r, [k]: e.target.value }))}
+                      placeholder="0.00"
+                      className="w-28 px-2 py-1 text-xs rounded-lg bg-card border border-border text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+                  </div>
+                ))}
+                <p className="text-[11px] text-muted-foreground">CPV = rate ÷ views, per video. Leave a KOL blank to skip.</p>
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground mb-4">
-              Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Columns reflect whatever was scraped.
+              Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Pick the calculated metrics above (profile-audit exports).
               {exportGroups.length > 1 && " Mixed scrape types or platforms are split into one file each (different column layouts)."}
             </p>
             <button

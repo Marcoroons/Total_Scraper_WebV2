@@ -111,6 +111,7 @@ class ProfileAuditRequest(BaseModel):
     incl_bot5: bool = False
     limit: int = 0   # cap videos per creator to exactly this (0 = no cap)
     calc_metrics: list[str] = []   # user-selected calculated metrics (e.g. Engagement Rate)
+    rates: dict = {}               # per-KOL rate ($) for CPV, keyed by username
     date_from: str = ""            # chosen scrape window start (for the duration column)
     date_to: str = ""
 
@@ -165,6 +166,7 @@ def export_profile_audit(req: ProfileAuditRequest):
         incl_bot5=req.incl_bot5,
         limit=req.limit,
         calc_metrics=req.calc_metrics,
+        rates=req.rates,
         date_from=req.date_from,
         date_to=req.date_to,
         requested_usernames=req.usernames,

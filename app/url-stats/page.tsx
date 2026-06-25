@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs } from "@/lib/hooks/useJobs";
 import { PlatformToggle } from "@/components/PlatformToggle";
-import { MetricsSelector } from "@/components/MetricsSelector";
 import { URLDataTable, type URLRow } from "@/components/URLDataTable";
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
@@ -23,8 +22,6 @@ export default function URLStatsPage() {
   const [platform, setPlatform] = useState<Platform>("Instagram");
   const [includeRate, setIncludeRate] = useState(false);
   const [rows, setRows] = useState<URLRow[]>([makeRow()]);
-  const [rawMetrics, setRawMetrics] = useState<string[]>([]);
-  const [calcMetrics, setCalcMetrics] = useState<string[]>([]);
   const [apifyKey, setApifyKey] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [queuing, setQueuing] = useState(false);
@@ -32,8 +29,6 @@ export default function URLStatsPage() {
 
   function handlePlatformChange(p: Platform) {
     setPlatform(p);
-    setRawMetrics([]);
-    setCalcMetrics([]);
   }
 
   async function handleQueue() {
@@ -45,9 +40,6 @@ export default function URLStatsPage() {
 
     if (validRows.length === 0) {
       errs.push("No URLs entered — paste at least one video or reel URL.");
-    }
-    if (rawMetrics.length === 0 && calcMetrics.length === 0) {
-      errs.push("No metrics selected — pick at least one raw or calculated metric.");
     }
     if (includeRate) {
       const missing = validRows.filter((r) => !r.rate.trim());
@@ -72,8 +64,8 @@ export default function URLStatsPage() {
         job_type:      "Specific URLs (Video Stats)",
         kol_username:  row.kol.trim(),
         rate:          includeRate ? row.rate.trim() : "",
-        raw_metrics:   rawMetrics,
-        calc_metrics:  calcMetrics,
+        raw_metrics:   [],
+        calc_metrics:  [],
         format_filter: "All Formats",
         target_limit:  10,
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
@@ -147,22 +139,12 @@ export default function URLStatsPage() {
           <URLDataTable rows={rows} onChange={setRows} includeRate={includeRate} />
         </div>
 
-        {/* Metrics */}
-        <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            Metrics to export
-            <span className="ml-1.5 normal-case tracking-normal font-normal">
-              (hover a calculated metric to see its formula)
-            </span>
+        {/* Metrics note — selection moved to export */}
+        <div className="bg-card border border-border rounded-xl p-5">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Metrics</p>
+          <p className="text-xs text-muted-foreground">
+            Views, likes, comments and shares are all captured. Pick which columns and calculated metrics to show when you <span className="text-foreground">export</span> in <a href="/queue" className="underline">Queue &amp; Export → Exporter</a> — no need to decide up front.
           </p>
-          <MetricsSelector
-            platform={platform}
-            rawSelected={rawMetrics}
-            calcSelected={calcMetrics}
-            onRawChange={setRawMetrics}
-            onCalcChange={setCalcMetrics}
-            accentColor={ACCENT}
-          />
         </div>
 
         {/* Apify key */}
