@@ -41,9 +41,10 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
   const [exportingJobId, setExportingJobId] = useState<string | null>(null);
   const [selectedIds,    setSelectedIds]    = useState<Set<string>>(new Set());
   const [deleting,       setDeleting]       = useState(false);
+  const [rescraping,     setRescraping]     = useState(false);
 
   // Fetch all statuses so the summary counts are accurate; filter by status client-side.
-  const { jobs, isLoading, error, refetch, cancelJob, retryJob, deleteJobs } = useJobs(
+  const { jobs, isLoading, error, refetch, cancelJob, retryJob, deleteJobs, createJobs } = useJobs(
     activeProjectId,
     { job_type: jobTypeFilter || undefined, sort }
   );
@@ -102,6 +103,49 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
       alert(e instanceof Error ? e.message : "Delete failed");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // Re-queue the selected jobs with their original settings — pick the KOLs to
+  // re-scrape without re-entering anything. Clones each job's config into a new
+  // PENDING job (the API strips id/status/created_at and resets status).
+  async function handleRescrapeSelected() {
+    const sel = displayedJobs.filter((j) => selectedIds.has(j.job_id));
+    if (sel.length === 0) return;
+    const n = sel.length;
+    if (!window.confirm(
+      `Re-scrape ${n} job${n !== 1 ? "s" : ""} with the same settings? ` +
+      `${n === 1 ? "A new pending job" : "New pending jobs"} will be queued.`
+    )) return;
+    setRescraping(true);
+    try {
+      const payloads = sel.map((j) => {
+        const extra = j as unknown as { max_retries?: number; date_multiplier?: number };
+        return {
+          project_id:    j.project_id,
+          target_url:    j.target_url,
+          platform:      j.platform,
+          job_type:      j.job_type,
+          kol_username:  j.kol_username,
+          rate:          j.rate,
+          raw_metrics:   j.raw_metrics,
+          calc_metrics:  j.calc_metrics,
+          format_filter: j.format_filter,
+          target_limit:  j.target_limit,
+          date_from:     j.date_from,
+          date_to:       j.date_to,
+          ...(j.apify_api_key ? { apify_api_key: j.apify_api_key } : {}),
+          ...(extra.max_retries ? { max_retries: extra.max_retries } : {}),
+          ...(extra.date_multiplier ? { date_multiplier: extra.date_multiplier } : {}),
+        };
+      });
+      await createJobs(payloads);
+      setSelectedIds(new Set());
+      await refetch();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Re-scrape failed");
+    } finally {
+      setRescraping(false);
     }
   }
 
@@ -241,8 +285,19 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
         <div className="flex items-center gap-2">
           {visibleSelected.length > 0 && (
             <button
+              onClick={handleRescrapeSelected}
+              disabled={rescraping || deleting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors disabled:opacity-50"
+              style={{ borderColor: "rgba(0,201,255,0.4)", color: "#00c9ff", background: "rgba(0,201,255,0.08)" }}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              {rescraping ? "Re-scraping…" : `Re-scrape (${visibleSelected.length})`}
+            </button>
+          )}
+          {visibleSelected.length > 0 && (
+            <button
               onClick={handleDeleteSelected}
-              disabled={deleting}
+              disabled={deleting || rescraping}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors disabled:opacity-50"
               style={{ borderColor: "rgba(239,68,68,0.4)", color: "#f87171", background: "rgba(239,68,68,0.08)" }}
             >
