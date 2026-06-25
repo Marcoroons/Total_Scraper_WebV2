@@ -100,6 +100,7 @@ class VideoStatsRequest(BaseModel):
     project_id: str
     video_urls: list[str]
     platform: str
+    calc_metrics: list[str] = []   # calculated metrics chosen at export time
 
 
 class ProfileAuditRequest(BaseModel):
@@ -133,7 +134,7 @@ def export_video_stats(req: VideoStatsRequest):
             detail="No video data found. The job may still be processing.",
         )
     df = pd.DataFrame(rows)
-    buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"))
+    buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"), calc_metrics=req.calc_metrics)
     platform_slug = req.platform.lower()
     return _xlsx_response(buf, f"video_stats_{platform_slug}.xlsx")
 

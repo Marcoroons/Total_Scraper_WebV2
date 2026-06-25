@@ -21,11 +21,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const membership = await assertMember(supabase, params.id, user.id);
   if (!membership) return NextResponse.json({ error: "Not a member of this team" }, { status: 403 });
 
+  // NB: select only columns guaranteed to exist on team_members (user_id, role).
+  // The table has no created_at in some schema versions — don't depend on it.
   const { data: members, error } = await supabase
     .from("team_members")
-    .select("user_id, role, created_at")
-    .eq("team_id", params.id)
-    .order("created_at", { ascending: true });
+    .select("user_id, role")
+    .eq("team_id", params.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -44,12 +45,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  const enriched = (members ?? []).map((m: { user_id: string; role: string; created_at: string }) => ({
+  const enriched = (members ?? []).map((m: { user_id: string; role: string }) => ({
     user_id:    m.user_id,
     email:      emailById.get(m.user_id) ?? "(unknown)",
     full_name:  nameById.get(m.user_id) ?? null,
     role:       m.role,
-    created_at: m.created_at,
+    created_at: null as string | null,
   }));
 
   // Pending team invites (best-effort — table may not exist yet)

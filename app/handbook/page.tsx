@@ -11,10 +11,10 @@ const PIPELINE = [
     phase: "Pre-Project — choosing & vetting KOLs",
     blurb: "Before you spend a cent on a creator, use these to decide who's worth it.",
     items: [
-      { name: "KOL Finder", soon: true, desc: "Finds KOLs under a hashtag and ranks the most popular / highest-engagement ones, then compares them against your shortlist. (Coming soon — included once stable.)" },
+      { name: "KOL Finder", soon: false, desc: "Ranks the creators surfacing under your scraped hashtags by reach, engagement and frequency, and flags who you've already scraped across projects/teams." },
       { name: "URL + Profile Scraper", soon: false, desc: "Pull KOL metrics by individual video (URL) or whole profile to back-test a chosen creator's real worth before committing budget." },
       { name: "Comment Sentiment Analysis", soon: false, desc: "Read how a KOL's audience actually feels — do their viewers and influence fit our needs and benefit us?" },
-      { name: "Hashtag / Trends", soon: true, desc: "Surfaces which video formats are working best for the project's space. (Coming soon.)" },
+      { name: "Hashtag / Trends", soon: false, desc: "Scrapes top content under hashtags, then surfaces trending creators and the winning video formats for your space." },
     ],
   },
   {
@@ -32,14 +32,14 @@ const PIPELINE = [
 const FUNCTIONS = [
   {
     name: "Video URL Scraper", icon: Video, color: "#f59e0b", soon: false,
-    how: "Pick a platform, paste a batch of video URLs (one per line), choose your metrics, and queue.",
-    requires: "Video URLs + at least one metric selected.",
-    produces: "Per-video engagement (views, likes, comments, shares) exportable to Excel from the Exporter.",
+    how: "Pick a platform, paste a batch of video URLs (one per line), and queue — every metric is captured automatically.",
+    requires: "Video URLs.",
+    produces: "Per-video engagement (views, likes, comments, shares). Choose which columns and calculated metrics to show in the Exporter.",
   },
   {
     name: "Profile Scraper", icon: User, color: "#a78bfa", soon: false,
-    how: "Pick platform & content type, set posts-per-profile and an optional date range, choose metrics, paste profiles, queue. Video sort order (Most Recent, etc.) is chosen in the Exporter.",
-    requires: "Content type, ≥1 profile, ≥1 metric. Date range is optional.",
+    how: "Pick platform & content type, set posts-per-profile and an optional date range, paste profiles, queue. Metrics and video sort order are chosen later in the Exporter.",
+    requires: "Content type and ≥1 profile. Date range is optional.",
     produces: "A per-creator audit (avg/most/least views, KPI estimate, per-video breakdown) compiled into one Excel from the Exporter.",
   },
   {
@@ -55,14 +55,14 @@ const FUNCTIONS = [
     produces: "One compiled Excel per scrape type, downloaded directly or scheduled to email.",
   },
   {
-    name: "KOL Finder", icon: Search, color: "#10b981", soon: true,
-    how: "Will search a hashtag and rank creators by reach/engagement.",
-    requires: "—", produces: "A ranked KOL shortlist. (Coming soon.)",
+    name: "KOL Finder", icon: Search, color: "#10b981", soon: false,
+    how: "Scrape hashtags, then rank the creators who appear by reach, engagement rate and frequency. Filter by hashtag and flag creators already in your database.",
+    requires: "Hashtag scrapes in the project.", produces: "A ranked KOL shortlist, exportable to CSV.",
   },
   {
-    name: "Hashtag / Trends", icon: TrendingUp, color: "#2dd4bf", soon: true,
-    how: "Will track content volume and rising formats for a topic.",
-    requires: "—", produces: "Trend & format insights. (Coming soon.)",
+    name: "Hashtag / Trends", icon: TrendingUp, color: "#2dd4bf", soon: false,
+    how: "Scrape top content under hashtags, then view trending creators and reverse-engineer the winning video format.",
+    requires: "Hashtags to scrape.", produces: "Trend & format insights, exportable to CSV.",
   },
 ];
 

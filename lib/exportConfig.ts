@@ -60,7 +60,7 @@ export function buildExportPayload(job: Job, endpoint: string, opts: ExportOptio
       date_from: job.date_from ?? "", date_to: job.date_to ?? "",
     };
   }
-  return { ...base, video_urls: [job.target_url] };
+  return { ...base, video_urls: [job.target_url], calc_metrics: o.calcMetrics };
 }
 
 /**
@@ -91,7 +91,7 @@ export function buildBatchExportPayload(jobs: Job[], endpoint: string, opts: Exp
       date_from: first.date_from ?? "", date_to: first.date_to ?? "",
     };
   }
-  return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean) };
+  return { ...base, video_urls: jobs.map((j) => j.target_url).filter(Boolean), calc_metrics: o.calcMetrics };
 }
 
 export function exportFilename(job: Job) {

@@ -213,36 +213,51 @@ def _widen(ws, spec: list[tuple[str, int]]):
         ws.column_dimensions[col].width = w
 
 
-def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False) -> io.BytesIO:
+def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
+                               calc_metrics=None) -> io.BytesIO:
+    from openpyxl.utils import get_column_letter
     df = df_raw.copy()
     df["Likes"]    = df["likes"].apply(_fmt)
     df["Comments"] = df["comments"].apply(_fmt)
     df["Shares"]   = df["shares"].apply(_fmt)
     df["Plays"]    = df["play_count"].apply(_fmt)
 
-    def _er(row):
+    # Calculated metrics chosen at export time. Only those derivable from
+    # likes/comments/shares/play_count. VTR is intentionally dropped — there is no
+    # separate view count (it was always "100%"); CPV needs a per-video rate the
+    # video table doesn't carry.
+    _CALC = {
+        "Engagement Rate":    lambda r: (r["likes"] + r["comments"] + r["shares"]) / max(r["play_count"], 1) * 100,
+        "Applause Rate":      lambda r: r["likes"] / max(r["play_count"], 1) * 100,
+        "Virality Rate":      lambda r: r["shares"] / max(r["play_count"], 1) * 100,
+        "Comment/View Ratio": lambda r: r["comments"] / max(r["play_count"], 1) * 100,
+    }
+    sel = [m for m in (calc_metrics or []) if m in _CALC]
+    if not sel:
+        sel = ["Engagement Rate"]
+
+    def _metric(row, m):
         if "Hidden" in (row["Likes"], row["Comments"], row["Shares"], row["Plays"]):
             return "Hidden"
-        plays = max(row["play_count"], 1)
-        return f"{(row['likes'] + row['comments'] + row['shares']) / plays * 100:.2f}%"
+        return f"{_CALC[m](row):.2f}%"
+    for m in sel:
+        df[m] = df.apply(lambda r, _m=m: _metric(r, _m), axis=1)
 
-    df["Engagement Rate"] = df.apply(_er, axis=1)
-
-    if is_tiktok:
-        out = df[["username", "video_url", "Plays", "Likes", "Comments", "Shares", "Engagement Rate"]]
-        out.columns = ["Username", "Video URL", "Play Count", "Likes", "Comments", "Shares", "Engagement Rate"]
-    else:
-        df["VTR"] = df["Plays"].apply(lambda v: "N/A" if v == "Hidden" else "100%")
-        out = df[["username", "video_url", "Plays", "Plays", "VTR", "Likes", "Comments", "Shares", "Engagement Rate"]].copy()
-        out.columns = ["Username", "Video URL", "Play Count", "View Count", "VTR", "Likes", "Comments", "Shares", "Engagement Rate"]
+    src_cols = ["username", "video_url", "Plays", "Likes", "Comments", "Shares"] + sel
+    out = df[src_cols].copy()
+    out.columns = ["Username", "Video URL", "Play Count", "Likes", "Comments", "Shares"] + sel
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="Video Stats")
         ws = writer.sheets["Video Stats"]
         _apply_header(ws)
-        _widen(ws, [("A", 25), ("B", 55), ("C", 16), ("D", 16), ("E", 14),
-                    ("F", 14), ("G", 14), ("H", 14), ("I", 18)])
+        widths = [
+            (get_column_letter(i),
+             25 if c == "Username" else 55 if c == "Video URL" else 16 if c == "Play Count" else 15)
+            for i, c in enumerate(out.columns, 1)
+        ]
+        _widen(ws, widths)
         ws.freeze_panes = "C2"
     buf.seek(0)
     return buf

@@ -19,7 +19,7 @@ interface Member {
   email: string;
   full_name: string | null;
   role: string;
-  created_at: string;
+  created_at: string | null;
 }
 
 interface PendingInvite {
@@ -265,7 +265,7 @@ function TeamDetail({ team, currentUserId, onMemberChange }: {
 
                   {/* Date */}
                   <span className="text-xs text-muted-foreground flex-shrink-0 w-16 text-right">
-                    {fmtDate(m.created_at)}
+                    {m.created_at ? fmtDate(m.created_at) : "—"}
                   </span>
 
                   {/* More menu */}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Download, RefreshCw, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
@@ -154,18 +154,30 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
   // posts than requested.
   const [scrapeCounts, setScrapeCounts] = useState<Record<string, number>>({});
 
+  // Stable key of completed profile creators, so the scrape-count fetch only
+  // re-runs when that set actually changes — not on every realtime job tick
+  // (which, with 100+ users and live updates, was firing N fetches constantly).
+  const profileScrapeKey = useMemo(() =>
+    jobs
+      .filter((j) => j.status === "COMPLETED" && j.job_type === "Profile Feed (Audit)" && j.kol_username)
+      .map((j) => `${j.platform}__${j.kol_username}`)
+      .sort()
+      .join("|"),
+    [jobs]
+  );
+
   useEffect(() => {
-    if (!activeProjectId) { setScrapeCounts({}); return; }
-    const profileJobs = jobs.filter(
-      (j) => j.status === "COMPLETED" && j.job_type === "Profile Feed (Audit)" && j.kol_username
-    );
-    if (profileJobs.length === 0) { setScrapeCounts({}); return; }
+    if (!activeProjectId || !profileScrapeKey) { setScrapeCounts({}); return; }
 
     const byPlatform = new Map<string, Set<string>>();
-    for (const j of profileJobs) {
-      const set = byPlatform.get(j.platform) ?? new Set<string>();
-      set.add(j.kol_username);
-      byPlatform.set(j.platform, set);
+    for (const pair of profileScrapeKey.split("|")) {
+      const sep = pair.indexOf("__");
+      if (sep < 0) continue;
+      const platform = pair.slice(0, sep);
+      const username = pair.slice(sep + 2);
+      const set = byPlatform.get(platform) ?? new Set<string>();
+      set.add(username);
+      byPlatform.set(platform, set);
     }
 
     let cancelled = false;
@@ -189,7 +201,7 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
       if (!cancelled) setScrapeCounts(merged);
     })();
     return () => { cancelled = true; };
-  }, [jobs, activeProjectId]);
+  }, [profileScrapeKey, activeProjectId]);
 
   async function handleCancel(job: Job) {
     try { await cancelJob(job.job_id); }

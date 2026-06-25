@@ -198,6 +198,9 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     const set = new Set<string>();
     const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
     for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) set.add(m);
+    // VTR needs a separate view count that profile audits don't capture — drop it
+    // so the picker only offers metrics this export can actually produce.
+    set.delete("VTR");
     return Array.from(set);
   }, [selectedPlatforms]);
   const profileKols = useMemo(
