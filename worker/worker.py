@@ -1042,6 +1042,31 @@ def _filter_ig_content(data: list, format_filter: str) -> list:
     return filtered
 
 
+def _ig_content_type(d: dict) -> str:
+    """
+    Classify a single Instagram post as "Video" (reel/video — carries a view count)
+    or "Image" (photo/carousel — no view count). Mirrors the signals in
+    _filter_ig_content so the export can tailor view-based metrics: reels have
+    views, images don't. Video signals win over image type (a sidecar containing a
+    video is treated as a video).
+    """
+    post_type = str(d.get("type", "") or d.get("mediaType", "") or "").strip().lower()
+    url       = str(d.get("url", ""))
+    is_video = (
+        post_type in ("graphvideo", "video", "reel", "clips", "igtv")
+        or d.get("isVideo") is True
+        or int(d.get("videoDuration") or 0) > 0
+        or d.get("videoPlayCount") is not None
+        or "/reel/" in url
+    )
+    if is_video:
+        return "Video"
+    if post_type in ("graphimage", "image", "graphsidecar", "sidecar", "carousel"):
+        return "Image"
+    # Unknown type — fall back to the presence of a play count.
+    return "Video" if int(d.get("videoPlayCount") or 0) > 0 else "Image"
+
+
 def _extract_post_date(item: dict) -> str:
     """
     Best-effort YYYY-MM-DD for a scraped post, checking the many field names the
@@ -1580,7 +1605,7 @@ def process_job(job):
                             "comments":     int(d.get("commentsCount",0) or 0),
                             "shares":       int(d.get("sharesCount",0) or 0),
                             "post_date":    _post_date(d),
-                            "content_type": "Video",
+                            "content_type": _ig_content_type(d),
                         })
                 else:
                     payload = [{"post_url":d.get("webVideoUrl") or d.get("videoUrl"),

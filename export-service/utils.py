@@ -236,18 +236,35 @@ def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
     if not sel:
         sel = ["Engagement Rate"]
 
+    # A post with no view count (a photo, or a privacy-restricted video) can't carry
+    # a view-based rate — show "N/A" instead of a misleading divide-by-1 figure.
     def _metric(row, m):
         if "Hidden" in (row["Likes"], row["Comments"], row["Shares"], row["Plays"]):
             return "Hidden"
+        if int(row.get("play_count") or 0) <= 0:
+            return "N/A"
         return f"{_CALC[m](row):.2f}%"
     for m in sel:
         df[m] = df.apply(lambda r, _m=m: _metric(r, _m), axis=1)
 
+    # Type column: reels/videos carry views, photos don't. Prefer a stored
+    # content_type when present; otherwise infer from the presence of a play count.
+    _IMG_CT = {"image", "graphimage", "photo", "sidecar", "graphsidecar", "carousel"}
+    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv"}
+    def _vtype(row):
+        ct = str(row.get("content_type", "") or "").strip().lower()
+        if ct in _IMG_CT:
+            return "Image"
+        if ct in _VID_CT:
+            return "Video"
+        return "Video" if int(row.get("play_count") or 0) > 0 else "Image"
+    df["Type"] = df.apply(_vtype, axis=1)
+
     _sel_raw = set(raw_metrics) if raw_metrics else {"Likes", "Comments", "Shares"}
     raw_cols = [rc for rc in ("Likes", "Comments", "Shares") if rc in _sel_raw]
-    src_cols = ["username", "video_url", "Plays"] + raw_cols + sel
+    src_cols = ["username", "video_url", "Type", "Plays"] + raw_cols + sel
     out = df[src_cols].copy()
-    out.columns = ["Username", "Video URL", "Play Count"] + raw_cols + sel
+    out.columns = ["Username", "Video URL", "Type", "Play Count"] + raw_cols + sel
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -256,7 +273,8 @@ def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
         _apply_header(ws)
         widths = [
             (get_column_letter(i),
-             25 if c == "Username" else 55 if c == "Video URL" else 16 if c == "Play Count" else 15)
+             25 if c == "Username" else 55 if c == "Video URL" else 16 if c == "Play Count"
+             else 10 if c == "Type" else 15)
             for i, c in enumerate(out.columns, 1)
         ]
         _widen(ws, widths)
@@ -330,6 +348,27 @@ def generate_profile_audit_excel(
             _mask &= _parsed <= pd.to_datetime(date_to, errors="coerce")
         df = df[_mask].reset_index(drop=True)
 
+    # ── Classify each post: Video (reel — has a view count) vs Image (photo/
+    # carousel — no view count). View-based metrics only make sense for videos, so
+    # the summary ranks videos only and image posts list view metrics as N/A.
+    # content_type (captured by the worker) is preferred; rows scraped before it
+    # existed fall back to "has a play count" so behaviour is unchanged for them.
+    if "content_type" not in df.columns:
+        df["content_type"] = ""
+    df["content_type"] = df["content_type"].fillna("").astype(str)
+    _IMG_CT = {"image", "graphimage", "photo", "sidecar", "graphsidecar", "carousel"}
+    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv"}
+    def _is_video_row(ct, plays) -> bool:
+        c = str(ct or "").strip().lower()
+        if c in _IMG_CT:
+            return False
+        if c in _VID_CT:
+            return True
+        return int(plays or 0) > 0
+    df["_is_video"] = [
+        _is_video_row(ct, pc) for ct, pc in zip(df["content_type"], df["play_count"])
+    ]
+
     # ── Calculated-metric columns for the Video Details sheet ───────────────────
     # Honour the metrics the user selected at scrape time. Only those derivable
     # from views/likes/comments/shares are computed here — VTR and CPV need a
@@ -382,7 +421,11 @@ def generate_profile_audit_excel(
 
     # Preserve paste order — use first-appearance of each username, not alphabetical
     ordered_kols = list(dict.fromkeys(df["username"].tolist()))
-    max_videos = max((len(df[df["username"] == k]) for k in ordered_kols), default=0)
+    # The V1, V2… columns show videos only, so width them off the video count.
+    max_videos = max(
+        (int(((df["username"] == k) & df["_is_video"]).sum()) for k in ordered_kols),
+        default=0,
+    )
     # Cap columns to exactly the requested number of videos (the DB can hold more
     # than one scrape's worth of rows per creator; we only show `limit`).
     if limit and limit > 0:
@@ -413,7 +456,7 @@ def generate_profile_audit_excel(
     ws.title = f"KOL Views ({platform_label})"
 
     fixed_headers = [
-        "KOL / Creator", "Platform", "# Videos",
+        "KOL / Creator", "Platform", "# Videos", "# Images",
         "Avg Views", "Most Views", "Least Views",
         "Date (Most Viewed)", "Date (Least Viewed)",
         "KPI Est. Views (next video)",
@@ -447,18 +490,21 @@ def generate_profile_audit_excel(
     for row_idx, kol in enumerate(ordered_kols, 2):
         group = df[df["username"] == kol]
         group   = _sort_group(group).reset_index(drop=True)
+        # Videos drive every view-based number; images are counted but set aside.
+        vid_group = group[group["_is_video"]].reset_index(drop=True)
         if limit and limit > 0:
-            group = group.head(limit).reset_index(drop=True)   # exactly `limit`, no more
-        plays   = group["play_count"]
-        n       = len(group)
+            vid_group = vid_group.head(limit).reset_index(drop=True)   # exactly `limit`, no more
+        n_images = int((~group["_is_video"]).sum())
+        plays   = vid_group["play_count"]
+        n       = len(vid_group)
         avg_v   = int(plays.mean()) if n else 0
         max_v   = int(plays.max())  if n else 0
         min_v   = int(plays.min())  if n else 0
 
         # Find dates for most and least viewed
         if n:
-            max_row = group.loc[plays.idxmax()]
-            min_row = group.loc[plays.idxmin()]
+            max_row = vid_group.loc[plays.idxmax()]
+            min_row = vid_group.loc[plays.idxmin()]
             date_most  = str(max_row.get("post_date","") or "")[:10]
             date_least = str(min_row.get("post_date","") or "")[:10]
         else:
@@ -473,16 +519,16 @@ def generate_profile_audit_excel(
         # defensible number for budget conversations. Rounded to the nearest 10,000.
         kpi_est = int(round(plays.median() / 10000.0)) * 10000 if n else 0
 
-        row_data = [kol, platform_label, n, avg_v, max_v, min_v, date_most, date_least, kpi_est]
+        row_data = [kol, platform_label, n, n_images, avg_v, max_v, min_v, date_most, date_least, kpi_est]
         if incl_top5:
-            top5 = group.nlargest(5, "play_count")
+            top5 = vid_group.nlargest(5, "play_count")
             row_data.append(int(top5["play_count"].mean()) if len(top5) else 0)
         if incl_bot5:
-            bot5 = group.nsmallest(5, "play_count")
+            bot5 = vid_group.nsmallest(5, "play_count")
             row_data.append(int(bot5["play_count"].mean()) if len(bot5) else 0)
 
         # Video cells: only the view count — URL and date go in the cell comment
-        for i, (_, vrow) in enumerate(group.iterrows()):
+        for i, (_, vrow) in enumerate(vid_group.iterrows()):
             row_data.append(int(vrow["play_count"]))
         # Pad to max_videos
         for _ in range(n, max_videos):
@@ -522,7 +568,7 @@ def generate_profile_audit_excel(
             if header.startswith("V") and header[1:].isdigit():
                 vid_idx = int(header[1:]) - 1
                 if vid_idx < n:
-                    vrow   = group.iloc[vid_idx]
+                    vrow   = vid_group.iloc[vid_idx]
                     url    = str(vrow.get("post_url","") or "")
                     pdate  = str(vrow.get("post_date","") or "")[:10]
                     likes  = int(vrow.get("likes",0) or 0)
@@ -543,7 +589,7 @@ def generate_profile_audit_excel(
 
     # Column widths for Sheet 1
     width_map = {
-        "KOL / Creator": 26, "Platform": 12, "# Videos": 10,
+        "KOL / Creator": 26, "Platform": 12, "# Videos": 10, "# Images": 10,
         "Avg Views": 14, "Most Views": 14, "Least Views": 14,
         "KPI Est. Views (next video)": 18,
         "Date (Most Viewed)": 16, "Date (Least Viewed)": 16,
@@ -568,7 +614,7 @@ def generate_profile_audit_excel(
     # SHEET 2: Full Details — one row per video, all columns visible
     # ═══════════════════════════════════════════════════════════════════════════
     ws2 = wb.create_sheet("Video Details")
-    detail_headers = (["KOL / Creator", "Platform", "Video #", "Views", "Date Posted"]
+    detail_headers = (["KOL / Creator", "Platform", "Type", "Video #", "Views", "Date Posted"]
                       + raw_cols + sel_calc
                       + ["Scrape Range", "Sort Order", "Video URL"])
     ws2.append(detail_headers)
@@ -582,20 +628,29 @@ def generate_profile_audit_excel(
     for kol in ordered_kols:
         group = df[df["username"] == kol]
         group = _sort_group(group).reset_index(drop=True)
+        vid_group = group[group["_is_video"]]
         if limit and limit > 0:
-            group = group.head(limit).reset_index(drop=True)   # match the summary cap
-        for i, (_, vrow) in enumerate(group.iterrows(), 1):
+            vid_group = vid_group.head(limit)                  # match the summary cap (videos)
+        img_group = group[~group["_is_video"]]
+        # Videos first (capped to the limit), then every image post so photos
+        # always show up here even when the video limit is reached.
+        details_group = pd.concat([vid_group, img_group]).reset_index(drop=True)
+        for i, (_, vrow) in enumerate(details_group.iterrows(), 1):
             v = int(vrow["play_count"])
+            is_vid = bool(vrow["_is_video"])
             l = int(vrow.get("likes", 0) or 0)
             c = int(vrow.get("comments", 0) or 0)
             s = int(vrow.get("shares", 0) or 0)
-            row = [kol, platform_label, i, v, str(vrow.get("post_date", "") or "")[:10]]
+            row = [kol, platform_label, "Video" if is_vid else "Image", i, v,
+                   str(vrow.get("post_date", "") or "")[:10]]
             _raw_vals = {"Likes": l, "Comments": c, "Shares": s}
             row += [_raw_vals[rc] for rc in raw_cols]
             for m in sel_calc:
-                if m == "CPV ($)":
+                if v <= 0:
+                    row.append("N/A")   # image / no-view post: view-based metric is undefined
+                elif m == "CPV ($)":
                     _rate = rates_lower.get(str(kol).lower(), 0.0)
-                    row.append(round(_rate / v, 4) if (_rate and v) else 0.0)
+                    row.append(round(_rate / v, 4) if _rate else 0.0)
                 else:
                     row.append(round(_CALC_FORMULAS[m](v, l, c, s), 2))
             row += [scrape_range, sort_by, str(vrow.get("post_url", "") or "")]
@@ -661,6 +716,19 @@ def generate_profile_audit_excel(
         notes.append((f"• {', '.join(unsupported_calc)}: not shown — needs a separate view "
                       f"count / cost figure that a profile audit doesn't capture.", False))
 
+    # ── Content types: reels carry views, photos don't ──────────────────────────
+    notes += [
+        ("", False),
+        ("CONTENT TYPES (Video vs Image)", True),
+        ("• Reels/videos carry a view (play) count; photos and carousels do not.", False),
+        ("• The KOL Views sheet ranks and averages VIDEOS only — '# Images' shows how many "
+         "photo posts were set aside so they don't drag the view averages to zero.", False),
+        ("• In Video Details, image posts still list their Likes/Comments, but view-based metrics "
+         "(Engagement Rate, Applause Rate, etc.) show 'N/A' — there is no view count to divide by.", False),
+        ("• A video with 0 recorded views (private/restricted) is likewise shown as 'N/A' for "
+         "view-based metrics.", False),
+    ]
+
     # ── Data completeness — flag creators that returned nothing / fewer than asked ──
     try:
         present_lower = {str(u).lower() for u in df["username"].unique()}
@@ -669,7 +737,8 @@ def generate_profile_audit_excel(
         partial = []
         if limit and limit > 0:
             for k in ordered_kols:
-                shown = min(len(df[df["username"] == k]), limit)
+                # `limit` is a videos-per-creator target, so count videos, not photos.
+                shown = min(int(((df["username"] == k) & df["_is_video"]).sum()), limit)
                 if shown < limit:
                     partial.append((k, shown))
         comp = [("", False), ("DATA COMPLETENESS", True)]
