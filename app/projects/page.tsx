@@ -47,8 +47,17 @@ function NewProjectModal({ onClose, onCreate }: {
   onCreate: (project: Project) => void;
 }) {
   const [name,     setName]     = useState("");
+  const [teamId,   setTeamId]   = useState("");
+  const [teams,    setTeams]    = useState<Array<{ team_id: string; team_name: string }>>([]);
   const [loading,  setLoading]  = useState(false);
   const [err,      setErr]      = useState("");
+
+  useEffect(() => {
+    fetch("/api/teams")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setTeams(Array.isArray(data) ? data : []))
+      .catch(() => setTeams([]));
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -59,7 +68,7 @@ function NewProjectModal({ onClose, onCreate }: {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project_name: name.trim() }),
+        body: JSON.stringify({ project_name: name.trim(), ...(teamId ? { team_id: teamId } : {}) }),
       });
       const body = await res.json();
       if (!res.ok) { setErr((body as { error?: string }).error ?? "Failed to create project"); return; }
@@ -105,6 +114,26 @@ function NewProjectModal({ onClose, onCreate }: {
               className="w-full px-3 py-2.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
+          {teams.length > 0 && (
+            <div>
+              <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                Share with
+              </label>
+              <select
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value)}
+                className="w-full px-3 py-2.5 text-sm rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Personal (only me)</option>
+                {teams.map((t) => (
+                  <option key={t.team_id} value={t.team_id}>{t.team_name} (whole team)</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Pick a team to share this project with everyone in it.
+              </p>
+            </div>
+          )}
           {err && (
             <p className="text-sm rounded-lg px-3 py-2" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>
               {err}
@@ -176,10 +205,9 @@ export default function ProjectsPage() {
   useEffect(() => { load(); }, [load]);
 
   function handleCreate(project: Project) {
-    const rich: RichProject = { ...project, team_name: null, status: "Active" };
-    setProjects((prev) => [...prev, rich]);
     setActiveProject(project);
     refreshProjects();
+    load(); // reload so a team-shared project shows its team name immediately
   }
 
   function handleActivate(project: RichProject) {

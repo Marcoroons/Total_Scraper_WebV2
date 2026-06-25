@@ -93,7 +93,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { project_name } = await request.json();
+  const { project_name, team_id } = await request.json();
   if (!project_name?.trim()) {
     return NextResponse.json(
       { error: "project_name is required" },
@@ -104,9 +104,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "project_name too long (max 100 chars)" }, { status: 400 });
   }
 
+  // Optionally share with a team — every member of that team then sees the
+  // project. Verify the creator actually belongs to the team first.
+  let teamId: string | null = null;
+  if (team_id) {
+    const { data: membership } = await supabase
+      .from("team_members")
+      .select("team_id")
+      .eq("team_id", team_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!membership) {
+      return NextResponse.json({ error: "You are not a member of that team" }, { status: 403 });
+    }
+    teamId = team_id;
+  }
+
   const { data, error } = await supabase
     .from("projects")
-    .insert({ project_name: project_name.trim(), user_id: user.id })
+    .insert({ project_name: project_name.trim(), user_id: user.id, team_id: teamId })
     .select()
     .single();
 

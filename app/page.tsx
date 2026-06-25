@@ -53,12 +53,6 @@ const FEATURES = [
   },
 ];
 
-const STATS = [
-  { label: "Records processed", value: "2.4B+" },
-  { label: "Platforms covered", value: "2" },
-  { label: "Uptime SLA", value: "99.9%" },
-];
-
 export default function LandingPage() {
   const [hovered, setHovered] = useState<number | null>(null);
 
@@ -179,26 +173,6 @@ export default function LandingPage() {
               Sign in
             </Link>
           </div>
-        </div>
-      </div>
-
-      {/* ── Stats strip ── */}
-      <div
-        className="px-8 py-7"
-        style={{ borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-      >
-        <div className="max-w-2xl mx-auto grid grid-cols-3 gap-4 text-center">
-          {STATS.map((s) => (
-            <div key={s.label}>
-              <div
-                className="text-3xl font-bold"
-                style={{ fontFamily: "Outfit, sans-serif", color: "#dde4f4", letterSpacing: "-0.02em" }}
-              >
-                {s.value}
-              </div>
-              <div className="text-[11px] mt-1 font-mono" style={{ color: "#5a7294" }}>{s.label}</div>
-            </div>
-          ))}
         </div>
       </div>
 

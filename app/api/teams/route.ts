@@ -6,6 +6,24 @@ export async function GET() {
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Auto-join: claim any pending team invites addressed to this user's email, so
+  // an invited person joins the moment they sign in — no accept step. Best-effort
+  // (skipped if the team_invites table isn't migrated yet).
+  if (user.email) {
+    const email = user.email.toLowerCase();
+    const { data: invites } = await supabase
+      .from("team_invites")
+      .select("team_id, role")
+      .eq("email", email);
+    if (invites && invites.length > 0) {
+      await supabase.from("team_members").upsert(
+        invites.map((i: { team_id: string; role: string }) => ({ team_id: i.team_id, user_id: user.id, role: i.role })),
+        { onConflict: "team_id,user_id", ignoreDuplicates: true }
+      );
+      await supabase.from("team_invites").delete().eq("email", email);
+    }
+  }
+
   const { data: memberships, error: memErr } = await supabase
     .from("team_members")
     .select("team_id, role")
@@ -18,7 +36,7 @@ export async function GET() {
 
   const { data: teams, error: teamErr } = await supabase
     .from("teams")
-    .select("team_id, team_name, created_at")
+    .select("team_id, team_name:name, created_at")
     .in("team_id", teamIds);
 
   if (teamErr) return NextResponse.json({ error: teamErr.message }, { status: 500 });
@@ -52,8 +70,8 @@ export async function POST(request: Request) {
 
   const { data: team, error } = await supabase
     .from("teams")
-    .insert({ team_name: team_name.trim(), owner_id: user.id })
-    .select()
+    .insert({ name: team_name.trim(), owner_id: user.id })
+    .select("team_id, team_name:name, created_at")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
