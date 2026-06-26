@@ -47,7 +47,7 @@ const NAV: NavSection[] = [
       { href: "/comments",        label: "Comment Sentiment",   icon: MessageSquare, color: "#f472b6" },
       { href: "/hashtags",        label: "Hashtag / Trends",    icon: Hash,          color: "#2dd4bf" },
       { href: "/kol-finder",      label: "KOL Finder",          icon: UserSearch,    color: "#fbbf24" },
-      { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c", soon: true },
+      { href: "/competitor",      label: "Competitor Analysis", icon: TrendingUp,    color: "#fb923c" },
     ],
   },
   {

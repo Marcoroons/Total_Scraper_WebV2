@@ -43,7 +43,9 @@ Apify actors → Supabase data tables → user exports via `export-service` → 
 - `scrape_jobs` optional columns added by migration: `max_retries`, `date_multiplier`, **`fetch_followers`** (API insert is column-safe).
 - `scheduled_reports.send_time` (HH:MM, ICT) added by migration; column-safe, defaults `09:00`.
 - `ig_/tiktok_influencer_profiles` optional columns added by migration: **`followers`** (denominator for image-post engagement rate) and **`view_count`** (Instagram `videoViewCount`, stored separately from `videoPlayCount`). Worker upsert is column-safe — keeps working until the SQL runs.
-- Global shared data tables have **no `project_id`**: `ig_/tiktok_influencer_profiles`, `_campaign_videos`, `_comments`, `trend_discovery`. `kol_snapshots` IS per-project.
+- `scrape_jobs` also has optional **`ecom_config`** (jsonb) for Ecom Listings jobs — API insert is column-safe.
+- **`ecom_listings`** (new table, see `sql/ecom_listings.sql`): one row per product variation, project-scoped, unique on `(project_id, product_id, variation_id, platform)`. `variation_id` is `''` (empty string) not NULL for listings with no variations so the unique constraint actually fires.
+- Global shared data tables have **no `project_id`**: `ig_/tiktok_influencer_profiles`, `_campaign_videos`, `_comments`, `trend_discovery`. `kol_snapshots` and `ecom_listings` ARE per-project.
 
 ## SQL migrations to run in Supabase (one-time)
 
@@ -54,6 +56,7 @@ Files in `sql/`:
 - `scheduled_reports_send_time.sql`
 - `follower_engagement.sql` — adds `scrape_jobs.fetch_followers` + `*_influencer_profiles.followers`
 - `view_count.sql` — adds `*_influencer_profiles.view_count`
+- `ecom_listings.sql` — adds the `ecom_listings` table + `scrape_jobs.ecom_config jsonb` (Competitor Analysis Phase 1)
 
 Plus:
 ```sql
@@ -64,8 +67,9 @@ ALTER TABLE public.scrape_jobs ADD COLUMN IF NOT EXISTS date_multiplier numeric 
 ## Pages (`app/`)
 
 `/` (landing), `/login`, `/signup`, `/reset-password`, `/dashboard`, `/profile-tracker`,
-`/url-stats`, `/comments`, `/competitor` (coming-soon), `/hashtags` (Trend Discovery + Video Optimisation),
-`/kol-finder`, `/queue` (Job Queue + Exporter), `/teams`, `/projects`, `/nlp-settings`, `/settings`, `/handbook`.
+`/url-stats`, `/comments`, `/competitor` (Competitor Analysis — Shopee / Tokopedia scraper),
+`/hashtags` (Trend Discovery + Video Optimisation), `/kol-finder`,
+`/queue` (Job Queue + Exporter), `/teams`, `/projects`, `/nlp-settings`, `/settings`, `/handbook`.
 
 ## Feature notes (current behaviour)
 
@@ -83,6 +87,14 @@ ALTER TABLE public.scrape_jobs ADD COLUMN IF NOT EXISTS date_multiplier numeric 
 - **Scheduled email reports** (Exporter): worker processes `scheduled_reports` at a chosen ICT time (HH:MM, stored in `send_time`). Sends a data workbook (not the formatted export yet); "rescrape before sending" toggle not yet honored.
 - **Queue:** row-select + bulk delete + bulk re-scrape; `<CatSpinner />` / Task Loading video shows while jobs are pending.
 - **Auth forms** include `autoComplete` / `name` / `id` attributes so browser password managers autofill correctly.
+- **Competitor Analysis (`/competitor`)** — Phase 1, Shopee + Tokopedia listings scraper.
+  - Job type: **`Ecom Listings`**. Config carried as `scrape_jobs.ecom_config` (jsonb):
+    `{platforms, search_mode: 'keyword'|'shop', keywords[]|shop_targets[], official_store_filter: 'all'|'official_only'|'non_official_only', brand_names[], max_listings_per_platform}`.
+  - Apify actors (hardcoded in `worker.py → ECOM_ACTORS`): Shopee `gio21/shopee-scraper`, Tokopedia `jupri/tokopedia-scraper`. Same `APIFY_TOKEN` env var — no new secrets.
+  - Worker writes one row per **variation** to `ecom_listings` with `parse_confidence='raw'`. Raw actor response stored in `raw_payload` (jsonb) so Phase 2 can re-parse without re-scraping.
+  - **Old "Multi-Layer Intelligence" ecom sweep** (5 retailers + curl_cffi Cloudflare bypass + flat `ecommerce_products` table) was scrapped 2026-06-26. Code preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/` — see that folder's README for revival checklist.
+  - Phase 2 (TODO): Bahasa parser (bundle counts `isi N` / `lusin`, `Nml`/`Ng` volume, container classification, flavour) writes `total_units`, `unit_volume`, `unit_volume_uom`, `container_type`, `flavour`, `price_per_100ml_or_g` and flips `parse_confidence` to `high`|`needs_review`.
+  - Phase 3 (TODO): cross-listing aggregation (market + brand granularity; trimmed mean / median by n_clean; MAD outlier guard; sold-count-weighted variant).
 
 ## Persistent agent memory
 
@@ -94,6 +106,7 @@ summary; prefer the memory files for the latest commit-by-commit status if avail
 
 > **Rule:** every commit that ships a behaviour, schema, page, or component change must add a one-line entry here in the same commit. Format: `YYYY-MM-DD — <short summary> (commit <short-sha>)`. Also update the relevant body section above when the change affects schema, features, SQL migrations, or pages.
 
+- 2026-06-26 — **Competitor Analysis Phase 1**: scrap old Multi-Layer Intelligence ecom sweep (preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/`), drop `curl_cffi` dep, add new `Ecom Listings` job type (Shopee `gio21/shopee-scraper` + Tokopedia `jupri/tokopedia-scraper`), new `ecom_listings` table + `scrape_jobs.ecom_config` column (`sql/ecom_listings.sql`), full Competitor Analysis page replacing the ComingSoon stub
 - 2026-06-26 — Restore VTR + expose Play Count / View Count as Excel-builder columns; Instagram-only (commit 9a09389)
 - 2026-06-26 — Builder metric controls + follower-based engagement rate for image posts (`fetch_followers` opt-in on Profile Tracker; new SQL `follower_engagement.sql` + `view_count.sql`) (commit ec1487c)
 - 2026-06-26 — Replace `Loader2` spinners with the animated task-loading cat across pages; added `components/CatSpinner.tsx` (commit a65e016)

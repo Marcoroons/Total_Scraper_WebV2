@@ -4,6 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
+export interface EcomJobConfig {
+  platforms: ("Shopee" | "Tokopedia")[];
+  search_mode: "keyword" | "shop";
+  keywords?: string[];
+  shop_targets?: string[];
+  official_store_filter: "all" | "official_only" | "non_official_only";
+  brand_names: string[];
+  max_listings_per_platform: number;
+}
+
 export interface Job {
   job_id: string;
   project_id: string;
@@ -22,6 +32,7 @@ export interface Job {
   apify_api_key?: string;
   error_message?: string;
   created_at: string;
+  ecom_config?: EcomJobConfig | null;
 }
 
 export interface JobFilters {
@@ -47,6 +58,7 @@ export interface JobPayload {
   max_retries?: number;
   date_multiplier?: number;
   fetch_followers?: boolean;
+  ecom_config?: EcomJobConfig;
 }
 
 export function useJobs(projectId: string | null, filters: JobFilters = {}) {

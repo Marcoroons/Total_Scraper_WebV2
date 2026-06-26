@@ -110,11 +110,11 @@ export async function POST(request: NextRequest) {
     .select();
 
   // Column-safe: if an optional column (max_retries / date_multiplier /
-  // fetch_followers) hasn't been migrated yet, strip them and retry so queueing
-  // still works.
-  if (error && /max_retries|date_multiplier|fetch_followers/i.test(error.message)) {
+  // fetch_followers / ecom_config) hasn't been migrated yet, strip them and
+  // retry so queueing still works.
+  if (error && /max_retries|date_multiplier|fetch_followers|ecom_config/i.test(error.message)) {
     const stripped = rows.map(
-      ({ max_retries: _mr, date_multiplier: _dm, fetch_followers: _ff, ...r }) => r
+      ({ max_retries: _mr, date_multiplier: _dm, fetch_followers: _ff, ecom_config: _ec, ...r }) => r
     );
     ({ data, error } = await supabase.from("scrape_jobs").insert(stripped).select());
   }

@@ -1,39 +1,10 @@
 """
 worker.py — Background Execution Engine (Railway)
 Restored: all Apify scraping, scheduled emails, recurring automations.
-Added: Multi-Layer Intelligence compiler (YouTube, Meta Ads, Trends, News, E-Commerce).
+Added: Multi-Layer Intelligence compiler (YouTube, Meta Ads, Trends, News).
+Added: Competitor Analysis Phase 1 — Shopee + Tokopedia listings ("Ecom Listings" job).
 """
 import os, time, re, requests, smtplib, base64, datetime, urllib.parse, json
-
-# curl_cffi: Chrome TLS fingerprint impersonation — bypasses Cloudflare on Indonesian e-commerce sites
-# Install: pip install curl_cffi==0.15.0
-try:
-    from curl_cffi import requests as cf_requests
-    _CFFI_OK = True
-except ImportError:
-    cf_requests = requests
-    _CFFI_OK = False
-    print("⚠️  curl_cffi not installed — Cloudflare-protected retailers (Tokopedia/Alfamart/Indomaret) may fail")
-
-_CHROME_HDRS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-    "DNT": "1",
-}
-
-def _cffi_get(url, params=None, extra_headers=None, verify=True, timeout=15):
-    """GET with Chrome TLS impersonation. Falls back to standard requests if curl_cffi unavailable."""
-    hdrs = {**_CHROME_HDRS, **(extra_headers or {})}
-    kw = dict(params=params, headers=hdrs, timeout=timeout)
-    if _CFFI_OK:
-        kw["impersonate"] = "chrome124"
-        if not verify: kw["verify"] = False
-        r = cf_requests.get(url, **kw)
-    else:
-        kw["verify"] = verify
-        r = requests.get(url, **kw)
-    return r if r.ok else None
 import feedparser
 from pytrends.request import TrendReq
 from email.message import EmailMessage
@@ -56,8 +27,12 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "").strip()
 ENABLE_INTELLIGENCE = os.environ.get("ENABLE_INTELLIGENCE", "").strip().lower() in ("1", "true", "yes", "on")
 INTELLIGENCE_JOB_TYPES = {
     "Competitor Ads (Meta)", "YouTube Intelligence",
-    "E-Commerce Intelligence", "Competitor Intelligence Scan",
+    "Competitor Intelligence Scan",
 }
+# NOTE: "E-Commerce Intelligence" was removed 2026-06-26 along with the old
+# Multi-Layer Intelligence ecom sweep. Replaced by "Ecom Listings" — see the
+# COMPETITOR ANALYSIS section below. Old code preserved in
+# DEAD_COMPETITOR_ANALYSIS_ENGINE/ for reference.
 
 try:
     supabase: Client = db.make_client()
@@ -337,665 +312,271 @@ def fetch_youtube_videos(pid, competitor_name):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ECOMMERCE SCRAPERS — routed through Apify Indonesian residential proxies
+# ═════════════════════════════════════════════════════════════════════════════
+# COMPETITOR ANALYSIS — Shopee + Tokopedia listings (Phase 1: raw scraping)
+# ═════════════════════════════════════════════════════════════════════════════
+# Schema: see sql/ecom_listings.sql.
+# Phase 1 stores raw listings (one row per variation) with parse_confidence='raw'.
+# Phase 2 will add Bahasa enrichment (bundle / volume / container / flavour).
+# Phase 3 will add cross-listing aggregation (median + MAD outliers, demand-wt).
 #
-# WHY PROXIES ARE REQUIRED:
-#   Shopee, Tokopedia, Alfamart, Indomaret all use Cloudflare Bot Management.
-#   This blocks all datacenter IP ranges (AWS, GCP, Railway) at the ASN level
-#   before any request is parsed — no header tricks can bypass this.
-#   Solution: Apify residential proxy pool routes through real Indonesian home
-#   IPs that Cloudflare trusts. Same Apify token you already have, extra credits.
-#
-# Schema (run once in Supabase if not exists):
-#   CREATE TABLE IF NOT EXISTS ecommerce_products (
-#       id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-#       project_id      uuid NOT NULL,
-#       competitor_name text NOT NULL,
-#       product_name    text NOT NULL,
-#       sku             text,
-#       current_price   numeric(12,2) NOT NULL,
-#       original_price  numeric(12,2),
-#       currency        varchar(10) DEFAULT 'IDR',
-#       stock_status    text DEFAULT 'in_stock',
-#       product_url     text,
-#       image_url       text,
-#       scraped_at      timestamptz DEFAULT now(),
-#       updated_at      timestamptz DEFAULT now()
-#   );
+# Old "Multi-Layer Intelligence" engine (5 retailers + flat ecommerce_products
+# table + curl_cffi Cloudflare bypass) was scrapped 2026-06-26. Its code lives
+# at DEAD_COMPETITOR_ANALYSIS_ENGINE/worker_ecom_legacy.py for reference; see
+# that folder's README.md for the why and a revival checklist.
 # ─────────────────────────────────────────────────────────────────────────────
 
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+ECOM_ACTORS = {
+    "Shopee":    "gio21/shopee-scraper",
+    "Tokopedia": "jupri/tokopedia-scraper",
+}
 
-
-def _ecom_name(p: dict) -> str:
-    """Extract product name from any field variant an API might return."""
-    for f in ("name","productName","product_name","title","Title","Name","itemName","displayName"):
-        v = p.get(f,"")
-        if v and str(v).strip(): return str(v).strip()[:255]
-    return ""
-
-def _parse_idr(raw) -> float:
-    """
-    Clean any Indonesian Rupiah price string to a numeric float.
-    Indonesian convention: dots = thousands separator, comma = decimal.
-    Examples: 'Rp 15.000' → 15000.0 | 'Rp 1.500.000,50' → 1500000.5
-    """
-    if not raw:
-        return 0.0
+def _ecom_parse_idr(raw) -> float:
+    """Clean an Indonesian Rupiah price string to a float. 'Rp 15.000' -> 15000.0.
+    Indonesian convention: dots = thousands separator, comma = decimal."""
+    if raw is None or raw == "": return 0.0
+    if isinstance(raw, (int, float)): return float(raw)
     s = re.sub(r'(?i)rp\.?\s*|idr\.?\s*|\s', '', str(raw))
     s = re.sub(r'[^\d.,]', '', s)
-    if not s:
-        return 0.0
-    dc = s.count('.'); cc = s.count(',')
-    if dc > 1:
-        s = s.replace('.', '').replace(',', '.')
-    elif dc == 1 and cc == 0:
-        s = s.replace('.', '') if len(s.split('.')[1]) == 3 else s
-    elif cc >= 1:
-        s = s.replace('.', '').replace(',', '.')
+    if not s: return 0.0
+    dc, cc = s.count('.'), s.count(',')
+    if dc > 1:                    s = s.replace('.', '').replace(',', '.')
+    elif dc == 1 and cc == 0:     s = s.replace('.', '') if len(s.split('.')[1]) == 3 else s
+    elif cc >= 1:                 s = s.replace('.', '').replace(',', '.')
     try:    return float(s)
     except: return 0.0
 
+def _ecom_safe_float(x):
+    try: return float(x) if x is not None and x != "" else None
+    except (TypeError, ValueError): return None
 
-def _ecom_row(pid, comp, platform, name, cur, orig=None,
-              sku=None, url=None, img=None, stock="in_stock") -> dict:
-    """Build a dict matching the ecommerce_products schema."""
-    return {
-        "project_id":      pid,
-        "competitor_name": comp,
-        "product_name":    str(name).strip()[:255],
-        "sku":             str(sku)[:100] if sku else None,
-        "current_price":   round(float(cur or 0), 2),
-        "original_price":  round(float(orig), 2) if orig else None,
-        "currency":        "IDR",
-        "stock_status":    stock or "in_stock",
-        "product_url":     str(url)[:500] if url else None,
-        "image_url":       str(img)[:500] if img else None,
-        "scraped_at":      datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "updated_at":      datetime.datetime.now(datetime.timezone.utc).isoformat(),
+def _ecom_safe_int(x):
+    try:
+        if x is None or x == "": return None
+        return int(float(x))
+    except (TypeError, ValueError): return None
+
+def _ecom_is_official(item: dict, platform: str) -> bool:
+    """Best-effort 'is official store' check across the field shapes Shopee /
+    Tokopedia actors may return. Reads both top-level booleans and nested shop dicts."""
+    if platform == "Shopee":
+        if any(item.get(k) for k in ("isOfficialShop","isMall","officialShop","shopeeMall")):
+            return True
+        shop = item.get("shop") if isinstance(item.get("shop"), dict) else {}
+        return bool(shop.get("isOfficial") or shop.get("isShopeeMall"))
+    if platform == "Tokopedia":
+        if any(item.get(k) for k in ("isOfficialStore","official","isOfficial","officialStore")):
+            return True
+        shop = item.get("shop") if isinstance(item.get("shop"), dict) else {}
+        if any(shop.get(k) for k in ("isOfficial","official","isOfficialStore")): return True
+        labels = item.get("labels") or item.get("badges") or []
+        if isinstance(labels, list):
+            for l in labels:
+                s = (l if isinstance(l, str) else str((l or {}).get("title") or (l or {}).get("name") or "")).lower()
+                if "official" in s: return True
+        return False
+    return False
+
+def _ecom_call_actor(actor: str, run_input: dict, apify_token: str) -> list:
+    """Thin wrapper around call_apify with verbose logging — the Tokopedia and
+    Shopee actors return different field shapes, so we always print the first
+    item's keys so future-us can adapt mappers without a re-run."""
+    items = call_apify(actor, run_input, apify_token) or []
+    if items and isinstance(items, list):
+        first = items[0] if isinstance(items[0], dict) else {}
+        print(f"      {actor} returned {len(items)} items; first-item keys: {list(first.keys())[:25]}")
+    return items
+
+def _shopee_run(target: str, mode: str, max_items: int, apify_token: str) -> list:
+    """Call gio21/shopee-scraper for one search target.
+    mode='keyword': target is a search term. mode='shop': target is a shop URL or username."""
+    if mode == "shop":
+        run_input = {"shopUrls": [target], "country": "ID", "maxItems": max_items}
+    else:
+        run_input = {"keyword": target, "country": "ID", "maxItems": max_items}
+    return _ecom_call_actor(ECOM_ACTORS["Shopee"], run_input, apify_token)
+
+def _tokopedia_run(target: str, mode: str, max_items: int, apify_token: str) -> list:
+    """Call jupri/tokopedia-scraper for one search target.
+    Confirmed input shape from the actor's console UI:
+      - 'query' (array of strings) — search terms
+      - 'limit' (int) — max results
+      - 'searchMode', 'shopLocation', 'sort', 'category', 'recentlyAdded',
+        'priceMin'/'priceMax', 'condition', 'deliveryDuration' — all optional
+        (exposed in the Product Search Filters block of the Apify UI).
+    Shop-URL mode: the actor doesn't show a dedicated shop input in the
+    keyword-search UI, so we pass the shop handle through 'query' as well and
+    log the response shape — Phase 2 can add a real shop scrape once we wire
+    in the filter knobs from the screenshots."""
+    run_input = {"query": [target], "limit": max_items}
+    return _ecom_call_actor(ECOM_ACTORS["Tokopedia"], run_input, apify_token)
+
+def _shopee_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
+    """Map a single gio21/shopee-scraper item to ecom_listings rows.
+    One row per variation; if the listing has no variations, one row total."""
+    product_id = str(raw.get("itemId") or raw.get("id") or raw.get("itemid") or "")[:64]
+    if not product_id: return []
+    shop_dict = raw.get("shop") if isinstance(raw.get("shop"), dict) else {}
+    base = {
+        "project_id": pid, "job_id": jid, "platform": "Shopee",
+        "product_id": product_id,
+        "shop_name":  str(raw.get("shopName") or raw.get("shop_name") or shop_dict.get("name") or "")[:200] or None,
+        "shop_url":   raw.get("shopUrl") or shop_dict.get("url") or None,
+        "is_official_store": _ecom_is_official(raw, "Shopee"),
+        "brand_name": brand or None,
+        "title":      str(raw.get("name") or raw.get("itemName") or raw.get("title") or "")[:500],
+        "description": str(raw.get("description") or raw.get("desc") or "")[:8000] or None,
+        "rating":     _ecom_safe_float(raw.get("rating") or raw.get("ratingStar") or raw.get("itemRating")),
+        "sold_count": _ecom_safe_int(raw.get("sold") or raw.get("historicalSold") or raw.get("soldCount")),
+        "url":        raw.get("itemUrl") or raw.get("url"),
+        "parse_confidence": "raw",
+        "raw_payload": raw,
     }
-
-
-def _proxy_session(apify_token: str) -> requests.Session:
-    """
-    Build a requests Session pre-configured with Apify Indonesian residential proxy.
-    Traffic appears to originate from real Indonesian home IPs → passes Cloudflare.
-    Proxy cost: ~$3–8/GB on Apify (a product search response is <100KB → cents).
-    """
-    tok   = (apify_token or APIFY_TOKEN).strip()
-    proxy = f"http://groups-RESIDENTIAL,country-ID:{tok}@proxy.apify.com:8000"
-    s = requests.Session()
-    s.proxies = {"http": proxy, "https": proxy}
-    s.verify  = False   # Apify proxy uses SSL interception
-    s.headers.update({
-        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-    })
-    return s
-
-
-def _shopee(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    Shopee Indonesia — community actor 'gio21/shopee-scraper'.
-    ✅ No login, no cookies, no setup. Built-in proxy rotation. Supports ID.
-    Pricing: ~$0.005/product (about Rp80/product — near free for 20-30 items).
-    """
-    try:
-        tok  = (apify_token or APIFY_TOKEN).strip()
-        hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-        run_input = {
-            "keyword":  brand,
-            "country":  "ID",
-            "maxItems": 30,
-        }
-        r = requests.post(
-            "https://api.apify.com/v2/acts/gio21~shopee-scraper/runs?waitForFinish=120",
-            headers=hdrs, json=run_input, timeout=135
-        )
-        if not r.ok:
-            return [], f"Shopee actor HTTP {r.status_code}: {r.text[:150]}"
-        ds    = r.json()["data"]["defaultDatasetId"]
-        items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs).json()
-        print(f"      Shopee gio21: {len(items)} products")
-        rows = []
-        for p in (items or []):
-            name = str(p.get("name","") or p.get("itemName","")).strip()[:255]
-            if not name: continue
-            # gio21 returns prices in IDR as integers (no ×100000 conversion needed)
-            cur  = _parse_idr(p.get("price", p.get("priceMin", 0)))
-            orig = _parse_idr(p.get("priceMax", p.get("originalPrice", 0))) or None
-            if orig and orig <= cur: orig = None
-            rows.append(_ecom_row(pid, brand, "Shopee", name, cur, orig,
-                                  sku=str(p.get("itemId","") or "")[:100] or None,
-                                  url=p.get("itemUrl") or p.get("url"),
-                                  img=p.get("image") or p.get("imageUrl"),
-                                  stock="in_stock" if p.get("stock",1) else "out_of_stock"))
-        return rows, ""
-    except Exception as e:
-        return [], str(e)[:200]
-
-def _tokopedia(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    Tokopedia — Strategy:
-    1. Direct ACE API (fastest, no proxy, free)
-    2. shahidirfan community actor (if ACE blocked)
-    3. Playwright fallback (last resort)
-    Failure modes are reported with clear reasons, never loops.
-    """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    tok  = (apify_token or APIFY_TOKEN).strip()
-    hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    variations = raw.get("variations") or raw.get("models") or raw.get("tierVariations") or []
     rows = []
+    if isinstance(variations, list) and variations and isinstance(variations[0], dict):
+        for v in variations:
+            vid = str(v.get("modelId") or v.get("id") or v.get("name") or "")[:64]
+            rows.append({
+                **base, "variation_id": vid or "0",
+                "listing_price_idr": _ecom_parse_idr(v.get("price") or v.get("priceMin") or raw.get("price")),
+                "stock": "in_stock" if _ecom_safe_int(v.get("stock") or v.get("stockCount")) else "out_of_stock",
+            })
+    else:
+        rows.append({
+            **base, "variation_id": "",
+            "listing_price_idr": _ecom_parse_idr(raw.get("price") or raw.get("priceMin")),
+            "stock": "in_stock" if (raw.get("stock") or 1) else "out_of_stock",
+        })
+    return rows
 
-    # ── Attempt 1: Tokopedia ACE API via curl_cffi (Chrome TLS fingerprint) ─
-    try:
-        r = _cffi_get(
-            "https://ace.tokopedia.com/search/product/v3",
-            params={"q": brand, "rows": 25, "start": 0, "source": "search",
-                    "device": "desktop", "related": "true", "ob": "23"},
-            extra_headers={
-                "X-Source": "tokopedia-lite",
-                "X-Device": "desktop web",
-                "X-Tkpd-Lite-Service": "zeus",
-                "Referer": f"https://www.tokopedia.com/search?q={urllib.parse.quote(brand)}",
-                "Origin": "https://www.tokopedia.com",
-            }
-        )
-        if r:
-            data = r.json()
-            products = (data.get("data",{}).get("products") or
-                        data.get("header",{}) and data.get("data",[]) or [])
-            # Handle nested structure
-            if isinstance(data.get("data"), dict):
-                products = data["data"].get("products", [])
-            for p in products:
-                name = str(p.get("name","") or p.get("product_name","")).strip()[:255]
-                if not name: continue
-                if not any(w in name.lower() for w in brand_words): continue
-                price_obj = p.get("price",{}) or {}
-                cur = _parse_idr(price_obj.get("text_idr","") or price_obj.get("value",0) or p.get("price_int",0))
-                rows.append(_ecom_row(pid, brand, "Tokopedia", name, cur,
-                    url=p.get("url") or p.get("product_url",""),
-                    img=p.get("image_url","") or p.get("thumbnail","")))
-            if rows:
-                print(f"      Tokopedia ACE API: {len(rows)} products")
-                return rows, ""
-            elif r.ok:
-                print(f"      Tokopedia ACE API: responded but 0 matching products — JSON keys: {list(data.keys())[:8]}")
-    except Exception as e:
-        print(f"      Tokopedia ACE API error: {e}")
-
-    # ── Attempt 2: shahidirfan actor (correct params) ─────────────────────
-    try:
-        r = requests.post(
-            "https://api.apify.com/v2/acts/shahidirfan~tokopedia-search-scraper/runs?waitForFinish=90",
-            headers=hdrs, json={"keyword": brand, "results_wanted": 25, "max_pages": 2}, timeout=105
-        )
-        if r.ok:
-            ds    = r.json()["data"]["defaultDatasetId"]
-            items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs, timeout=20).json()
-            for p in (items or []):
-                name = str(p.get("name","") or p.get("productName","")).strip()[:255]
-                if not name or not any(w in name.lower() for w in brand_words): continue
-                cur = _parse_idr(p.get("price",0) or p.get("currentPrice",0))
-                rows.append(_ecom_row(pid, brand, "Tokopedia", name, cur,
-                    url=p.get("url") or p.get("productUrl",""), img=p.get("imageUrl","")))
-            if rows:
-                print(f"      Tokopedia shahidirfan: {len(rows)} products")
-                return rows, ""
-        else:
-            err = r.json().get("error",{})
-            if "not-rented" in str(err.get("type","")):
-                print(f"      Tokopedia shahidirfan: requires paid rental — skipping")
-            else:
-                print(f"      Tokopedia shahidirfan HTTP {r.status_code}: {r.text[:100]}")
-    except Exception as e:
-        print(f"      Tokopedia shahidirfan error: {e}")
-
-    # ── Attempt 3: Playwright fallback ────────────────────────────────────
-    try:
-        q = urllib.parse.quote(brand)
-        r = requests.post(
-            "https://api.apify.com/v2/acts/apify~playwright-scraper/runs?waitForFinish=120",
-            headers=hdrs, json={
-                "startUrls":[{"url":f"https://www.tokopedia.com/search?q={q}&st=product&official=true"}],
-                "pageFunction":"""async function pageFunction(c){const{page}=c;await page.waitForTimeout(5000);return await page.evaluate(()=>{try{const nd=JSON.parse(document.getElementById('__NEXT_DATA__').textContent);const prods=nd?.props?.pageProps?.data?.searchProductV5?.data?.products||nd?.props?.pageProps?.initialState?.searchProduct?.data?.products||[];return prods.slice(0,25).map(x=>({name:x.name,price:String(x.price?.value||0),url:x.url,img:x.imageUrl,sku:String(x.id||'')}))}catch(e){return[{_error:e.message}]}})}""",
-                "maxPagesPerCrawl":1,
-                "proxyConfiguration":{"useApifyProxy":True},
-                "launchContext":{"launchOptions":{"headless":True},"stealth":True},
-            }, timeout=140
-        )
-        if r.ok:
-            ds = r.json()["data"]["defaultDatasetId"]
-            items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs, timeout=20).json()
-            for item in (items or []):
-                if item.get("_error"): print(f"      Tokopedia playwright page error: {item['_error']}"); continue
-                prods = item if isinstance(item, list) else ([item] if item.get("name") else [])
-                for p in prods:
-                    name = str(p.get("name","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    rows.append(_ecom_row(pid, brand, "Tokopedia", name, _parse_idr(p.get("price",0)),
-                        url=p.get("url",""), img=p.get("img","")))
-            if rows:
-                print(f"      Tokopedia playwright: {len(rows)} products")
-                return rows, ""
-            print(f"      Tokopedia playwright: 0 products — selectors may need update or page blocked")
-        else:
-            ecode = r.json().get("error",{}).get("message","")
-            if "no-credit" in ecode.lower() or "insufficient" in ecode.lower():
-                return [], "TOKOPEDIA FAIL: Insufficient Apify credits — top up at console.apify.com"
-            print(f"      Tokopedia playwright HTTP {r.status_code}")
-    except requests.Timeout:
-        return [], "TOKOPEDIA FAIL: Playwright timed out (120s) — try again or reduce request scope"
-    except Exception as e:
-        return [], f"TOKOPEDIA FAIL: {str(e)[:150]}"
-
-    return [], "TOKOPEDIA FAIL: All 3 strategies exhausted — ACE API returned empty, shahidirfan not rented, playwright returned 0 products. Try again in a few minutes (possible rate limit)."
-
-
-def _alfamart(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    Alfamart — Strategy:
-    1. alfagift.id mobile app API (fastest, no proxy)
-    2. Direct search scrape via cheerio-scraper (no JS needed for initial HTML)
-    3. Clear failure message if both fail
-    """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    tok  = (apify_token or APIFY_TOKEN).strip()
-    hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+def _tokopedia_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
+    """Map a single jupri/tokopedia-scraper item to ecom_listings rows.
+    Robust to several field-name conventions because the actor's exact shape
+    isn't documented here; raw_payload preserves the original for Phase 2."""
+    product_id = (str(raw.get("id") or raw.get("productId") or raw.get("product_id") or raw.get("url") or "")[:200])
+    if not product_id: return []
+    shop_dict = raw.get("shop") if isinstance(raw.get("shop"), dict) else {}
+    base = {
+        "project_id": pid, "job_id": jid, "platform": "Tokopedia",
+        "product_id": product_id,
+        "shop_name":  str(shop_dict.get("name") or raw.get("shopName") or raw.get("seller") or "")[:200] or None,
+        "shop_url":   shop_dict.get("url") or raw.get("shopUrl") or None,
+        "is_official_store": _ecom_is_official(raw, "Tokopedia"),
+        "brand_name": brand or None,
+        "title":      str(raw.get("name") or raw.get("title") or raw.get("productName") or "")[:500],
+        "description": str(raw.get("description") or raw.get("desc") or "")[:8000] or None,
+        "rating":     _ecom_safe_float(raw.get("rating") or raw.get("avgRating") or raw.get("ratingAverage")),
+        "sold_count": _ecom_safe_int(raw.get("sold") or raw.get("soldCount") or raw.get("countSold")),
+        "url":        raw.get("url") or raw.get("productUrl"),
+        "parse_confidence": "raw",
+        "raw_payload": raw,
+    }
+    variations = raw.get("variants") or raw.get("variations") or raw.get("skus") or []
     rows = []
+    if isinstance(variations, list) and variations and isinstance(variations[0], dict):
+        for v in variations:
+            vid = str(v.get("id") or v.get("sku") or v.get("name") or "")[:64]
+            rows.append({
+                **base, "variation_id": vid or "0",
+                "listing_price_idr": _ecom_parse_idr(v.get("price") or raw.get("price")),
+                "stock": "in_stock" if _ecom_safe_int(v.get("stock") or v.get("stockCount")) else "out_of_stock",
+            })
+    else:
+        rows.append({
+            **base, "variation_id": "",
+            "listing_price_idr": _ecom_parse_idr(raw.get("price") or raw.get("priceMin")),
+            "stock": "in_stock" if (raw.get("stock") or 1) else "out_of_stock",
+        })
+    return rows
 
-    # ── Attempt 1: alfagift.id API (mobile app endpoint) ─────────────────
-    for api_url in [
-        f"https://api.alfagift.id/v2/products/search?query={urllib.parse.quote(brand)}&page=1&limit=25",
-        f"https://api.alfagift.id/api/v1/product/search?q={urllib.parse.quote(brand)}&limit=25",
-        f"https://api.alfagift.id/api/v2/product/search?keyword={urllib.parse.quote(brand)}&page=1",
-    ]:
-        try:
-            r = _cffi_get(api_url, verify=False,
-                extra_headers={"User-Agent":"AlfaGift/4.0 (Android; API 31)","Accept":"application/json"})
-            if r:
-                data = r.json()
-                items = (data.get("data",{}).get("items") or data.get("items") or
-                         data.get("data",{}).get("products") or data.get("products") or
-                         data.get("data") if isinstance(data.get("data"), list) else [])
-                for p in (items or [])[:25]:
-                    name = str(p.get("name","") or p.get("product_name","") or p.get("productName","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    cur = _parse_idr(p.get("price",0) or p.get("selling_price",0) or p.get("normalPrice",0))
-                    rows.append(_ecom_row(pid, brand, "Alfamart", name, cur,
-                        url=p.get("url","") or p.get("product_url",""),
-                        img=p.get("image","") or p.get("imageUrl","") or p.get("thumbnail","")))
-                if rows:
-                    print(f"      Alfamart API: {len(rows)} products ({api_url.split('?')[0].split('/')[-2]})")
-                    return rows, ""
-        except Exception as e:
-            continue  # Try next URL
+def _apply_official_filter(items: list, mode: str, platform: str) -> list:
+    if mode == "all" or not mode: return items
+    flagged = [it for it in items if _ecom_is_official(it, platform)]
+    if mode == "official_only":     return flagged
+    if mode == "non_official_only": return [it for it in items if it not in flagged]
+    return items
 
-    print(f"      Alfamart direct API: 0 products — trying Apify scraper")
-
-    # ── Attempt 2: Apify playwright (datacenter proxy, no residential needed) ──
-    try:
-        q = urllib.parse.quote(brand)
-        r = requests.post(
-            "https://api.apify.com/v2/acts/apify~playwright-scraper/runs?waitForFinish=120",
-            headers=hdrs, json={
-                "startUrls":[{"url":f"https://www.alfagift.id/search?q={q}"}],
-                "pageFunction":"""async function pageFunction(c){
-const{page}=c;
-await page.waitForTimeout(6000);
-// Try JSON-LD first (most reliable)
-const jld = await page.evaluate(()=>{
-  const scripts=[...document.querySelectorAll('script[type="application/ld+json"]')];
-  const out=[];
-  for(const s of scripts){try{const d=JSON.parse(s.textContent);const items=d.itemListElement||[];items.forEach(i=>{if(i.item?.name||i.name)out.push({name:i.item?.name||i.name,price:String(i.item?.offers?.price||i.offers?.price||0),url:i.item?.url||i.url||''})});}catch(e){}}
-  return out;
-});
-if(jld.length) return jld;
-// Fallback: DOM selectors
-return await page.evaluate(()=>{
-  const out=[];
-  const sels=['[data-testid="product-card"]','[class*="ProductCard"]','[class*="product-card"]','[class*="product_card"]','.product-item','[class*="item-product"]'];
-  for(const sel of sels){
-    document.querySelectorAll(sel).forEach((el,i)=>{
-      if(i>=25)return;
-      const n=(el.querySelector('[class*="product-name"],[class*="productName"],[class*="name"],h3,h4')?.innerText||'').trim();
-      const p=(el.querySelector('[class*="price"],[class*="Price"]')?.innerText||'').replace(/[^0-9,.]/g,'');
-      const img=el.querySelector('img')?.src||'';
-      const url=el.querySelector('a')?.href||'';
-      if(n&&p)out.push({name:n,price:p,image_url:img,product_url:url});
-    });
-    if(out.length)break;
-  }
-  return out;
-});
-}""",
-                "maxPagesPerCrawl":1,
-                "proxyConfiguration":{"useApifyProxy":True},
-                "launchContext":{"launchOptions":{"headless":True},"stealth":True},
-            }, timeout=140
-        )
-        if r.ok:
-            ds = r.json()["data"]["defaultDatasetId"]
-            items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs, timeout=20).json()
-            for item in (items or []):
-                prods = item if isinstance(item, list) else ([item] if item.get("name") else [])
-                for p in prods:
-                    name = str(p.get("name","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    cur = _parse_idr(p.get("price",0))
-                    if cur < 100: continue  # price parse failed
-                    rows.append(_ecom_row(pid, brand, "Alfamart", name, cur,
-                        url=p.get("product_url",""), img=p.get("image_url","")))
-            if rows:
-                print(f"      Alfamart playwright: {len(rows)} products")
-                return rows, ""
-            status = r.json().get("data",{}).get("status","")
-            return [], f"ALFAMART FAIL: Playwright ran (status={status}) but 0 products matched '{brand}'. alfagift.id may have updated their page structure."
-        else:
-            err = r.json().get("error",{}).get("message","")
-            if "no-credit" in err.lower(): return [], "ALFAMART FAIL: Insufficient Apify credits"
-            return [], f"ALFAMART FAIL: Playwright HTTP {r.status_code}"
-    except requests.Timeout:
-        return [], "ALFAMART FAIL: Playwright timed out (120s)"
-    except Exception as e:
-        return [], f"ALFAMART FAIL: {str(e)[:150]}"
-
-
-def _indomaret(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
+def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
     """
-    Indomaret — Strategy:
-    1. klikindomaret.com AJAX endpoint (direct, no proxy)
-    2. Playwright fallback
+    Run an 'Ecom Listings' scrape job.
+    cfg shape (also see app/competitor/page.tsx for the UI side):
+      {
+        "platforms":                 ["Shopee","Tokopedia"],   # at least one
+        "search_mode":               "keyword" | "shop",
+        "keywords":                  [str, ...],               # required if mode='keyword'
+        "shop_targets":              [str, ...],               # required if mode='shop' (URLs / handles)
+        "official_store_filter":     "all" | "official_only" | "non_official_only",
+        "brand_names":               [str, ...],               # first one tags listings
+        "max_listings_per_platform": int (10..1000, default 200),
+      }
+    Phase 1: writes raw rows to ecom_listings with parse_confidence='raw'.
+    Bahasa enrichment + cross-listing aggregation land in Phase 2/3.
+    Returns the number of rows written across all platforms.
     """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    tok  = (apify_token or APIFY_TOKEN).strip()
-    hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-    rows = []
+    platforms  = [p for p in (cfg.get("platforms") or []) if p in ECOM_ACTORS]
+    if not platforms:
+        raise ValueError("ecom_config.platforms must include 'Shopee' and/or 'Tokopedia'")
+    mode       = (cfg.get("search_mode") or "keyword").lower()
+    of_filter  = (cfg.get("official_store_filter") or "all").lower()
+    keywords   = [str(k).strip() for k in (cfg.get("keywords") or []) if str(k).strip()]
+    shop_tgts  = [str(s).strip() for s in (cfg.get("shop_targets") or []) if str(s).strip()]
+    brands     = [str(b).strip() for b in (cfg.get("brand_names") or []) if str(b).strip()]
+    brand_tag  = brands[0] if brands else None
+    cap        = max(10, min(int(cfg.get("max_listings_per_platform") or 200), 1000))
 
-    # ── Attempt 1: KlikIndomaret AJAX product list ────────────────────────
-    for attempt_url, attempt_params in [
-        ("https://www.klikindomaret.com/product/getlist",
-         {"keyword": brand, "currentPage": 1, "sortir": "def", "totalItem": 25}),
-        ("https://www.klikindomaret.com/api/product/search",
-         {"query": brand, "page": 1, "limit": 25}),
-    ]:
-        try:
-            r = _cffi_get(attempt_url, params=attempt_params,
-                extra_headers={"X-Requested-With":"XMLHttpRequest","Referer":"https://www.klikindomaret.com/"})
-            if r:
-                data = r.json() if r.headers.get("content-type","").startswith("application/json") else {}
-                items = data.get("Data") or data.get("items") or data.get("products") or []
-                for p in items[:25]:
-                    name = str(p.get("Name","") or p.get("ProductName","") or p.get("name","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    cur = _parse_idr(p.get("Price",0) or p.get("price",0) or p.get("HargaNormal",0))
-                    rows.append(_ecom_row(pid, brand, "Indomaret", name, cur,
-                        url=p.get("Url","") or p.get("url",""),
-                        img=p.get("Image","") or p.get("image","")))
-                if rows:
-                    print(f"      Indomaret AJAX: {len(rows)} products")
-                    return rows, ""
-        except Exception:
-            continue
+    if mode == "keyword" and not keywords:
+        raise ValueError("search_mode='keyword' but no keywords provided")
+    if mode == "shop" and not shop_tgts:
+        raise ValueError("search_mode='shop' but no shop_targets provided")
 
-    print(f"      Indomaret AJAX: 0 products — trying Apify scraper")
+    targets      = keywords if mode == "keyword" else shop_tgts
+    per_call_cap = max(10, cap // max(1, len(targets)))
+    total_written = 0
 
-    # ── Attempt 2: Playwright scraper ─────────────────────────────────────
-    try:
-        q = urllib.parse.quote(brand)
-        r = requests.post(
-            "https://api.apify.com/v2/acts/apify~playwright-scraper/runs?waitForFinish=120",
-            headers=hdrs, json={
-                "startUrls":[{"url":f"https://www.klikindomaret.com/search?keyword={q}"}],
-                "pageFunction":"""async function pageFunction(c){
-const{page}=c;
-await page.waitForTimeout(6000);
-return await page.evaluate(()=>{
-  const out=[];
-  const sels=['[class*="product-card"]','[class*="ProductCard"]','[class*="prd-"]','.product-item','[class*="item-wrap"]'];
-  for(const sel of sels){
-    document.querySelectorAll(sel).forEach((el,i)=>{
-      if(i>=25)return;
-      const n=(el.querySelector('[class*="product-name"],[class*="productName"],h3,h4,[class*="name"]')?.innerText||'').trim();
-      const p=(el.querySelector('[class*="price"],[class*="Price"],[class*="harga"]')?.innerText||'').replace(/[^0-9,.]/g,'');
-      const img=el.querySelector('img')?.src||'';
-      if(n&&p)out.push({name:n,price:p,image_url:img});
-    });
-    if(out.length)break;
-  }
-  return out;
-});
-}""",
-                "maxPagesPerCrawl":1,
-                "proxyConfiguration":{"useApifyProxy":True},
-                "launchContext":{"launchOptions":{"headless":True},"stealth":True},
-            }, timeout=140
-        )
-        if r.ok:
-            ds = r.json()["data"]["defaultDatasetId"]
-            items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs, timeout=20).json()
-            for item in (items or []):
-                prods = item if isinstance(item, list) else ([item] if item.get("name") else [])
-                for p in prods:
-                    name = str(p.get("name","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    cur = _parse_idr(p.get("price",0))
-                    if cur < 100: continue
-                    rows.append(_ecom_row(pid, brand, "Indomaret", name, cur, img=p.get("image_url","")))
-            if rows:
-                print(f"      Indomaret playwright: {len(rows)} products")
-                return rows, ""
-            return [], "INDOMARET FAIL: 0 products — KlikIndomaret AJAX empty and playwright returned 0. Check Railway logs for page structure changes."
-        else:
-            err = r.json().get("error",{}).get("message","")
-            if "no-credit" in err.lower(): return [], "INDOMARET FAIL: Insufficient Apify credits"
-            return [], f"INDOMARET FAIL: Playwright HTTP {r.status_code}"
-    except requests.Timeout:
-        return [], "INDOMARET FAIL: Playwright timed out (120s)"
-    except Exception as e:
-        return [], f"INDOMARET FAIL: {str(e)[:150]}"
+    for platform in platforms:
+        print(f"   🛒 Ecom {platform}: {mode} mode, {len(targets)} target(s), cap {cap}")
+        runner = _shopee_run if platform == "Shopee" else _tokopedia_run
+        mapper = _shopee_to_rows if platform == "Shopee" else _tokopedia_to_rows
 
-
-def _tiktok_shop(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    TikTok Shop — Strategy:
-    1. TikTok Shop public search page via playwright + Chrome stealth
-    2. Try alternate URL patterns
-    """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    tok  = (apify_token or APIFY_TOKEN).strip()
-    hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-    rows = []
-
-    pf_template = """async function pageFunction(c){
-const{page}=c;
-await page.waitForTimeout(10000);
-return await page.evaluate(()=>{
-  const out=[];
-  const sels=[
-    '[data-e2e="search_top_product"]',
-    '[class*="search-product"]',
-    '[class*="ProductCard"]',
-    '[class*="product-card"]',
-    '[class*="ShopCard"]',
-    '[class*="goods-card"]',
-  ];
-  for(const sel of sels){
-    document.querySelectorAll(sel).forEach((el,i)=>{
-      if(i>=20)return;
-      const name_el=el.querySelector('[class*="title"],[class*="name"],[class*="product-title"],h3,span[title]');
-      const n=(name_el?.innerText||name_el?.title||'').trim();
-      const price_el=el.querySelector('[class*="price"],[class*="Price"]');
-      const p=(price_el?.innerText||'').replace(/[^0-9,.]/g,'');
-      const url=el.querySelector('a')?.href||'';
-      if(n&&p)out.push({name:n,price:p,url:url});
-    });
-    if(out.length)break;
-  }
-  return out;
-});
-}"""
-
-    for search_url in [
-        f"https://www.tiktok.com/search?q={urllib.parse.quote(brand)}&type=product",
-        f"https://shop.tiktok.com/search?q={urllib.parse.quote(brand)}",
-    ]:
-        try:
-            r = requests.post(
-                "https://api.apify.com/v2/acts/apify~playwright-scraper/runs?waitForFinish=150",
-                headers=hdrs, json={
-                    "startUrls":[{"url": search_url}],
-                    "pageFunction": pf_template,
-                    "maxPagesPerCrawl":1,
-                    "proxyConfiguration":{"useApifyProxy":True, "apifyProxyGroups":["RESIDENTIAL"], "apifyProxyCountry":"ID"},
-                    "launchContext":{"launchOptions":{"headless":True},"stealth":True,"useChrome":True},
-                }, timeout=170
-            )
-            if not r.ok:
-                err = r.json().get("error",{})
-                if "no-credit" in str(err.get("message","")).lower():
-                    return [], "TIKTOK SHOP FAIL: Insufficient Apify credits (residential proxy required)"
-                if "not-rented" in str(err.get("type","")).lower():
-                    return [], "TIKTOK SHOP FAIL: Playwright actor not available on your Apify plan"
+        seen_keys = set()
+        raw_items = []
+        for t in targets:
+            try:
+                items = runner(t, mode, per_call_cap, apify_token)
+            except Exception as e:
+                print(f"      '{t}' FAILED: {str(e)[:200]}")
                 continue
-            ds = r.json()["data"]["defaultDatasetId"]
-            items = requests.get(f"https://api.apify.com/v2/datasets/{ds}/items", headers=hdrs, timeout=20).json()
-            for item in (items or []):
-                prods = item if isinstance(item, list) else ([item] if item.get("name") else [])
-                for p in prods:
-                    name = str(p.get("name","")).strip()[:255]
-                    if not name or not any(w in name.lower() for w in brand_words): continue
-                    cur = _parse_idr(p.get("price",0))
-                    if cur < 100: continue
-                    rows.append(_ecom_row(pid, brand, "TikTok Shop", name, cur, url=p.get("url","")))
-            if rows:
-                print(f"      TikTok Shop playwright: {len(rows)} products ({search_url[:40]})")
-                return rows, ""
-            print(f"      TikTok Shop {search_url[:40]}: 0 products after filter")
-        except requests.Timeout:
-            print(f"      TikTok Shop timeout on {search_url[:40]}")
+            for it in (items or []):
+                if not isinstance(it, dict): continue
+                key = str(it.get("itemId") or it.get("id") or it.get("url") or "")
+                if not key or key in seen_keys: continue
+                seen_keys.add(key)
+                raw_items.append(it)
+                if len(raw_items) >= cap: break
+            if len(raw_items) >= cap: break
+
+        filtered = _apply_official_filter(raw_items, of_filter, platform)
+        print(f"      after official_store_filter='{of_filter}': {len(filtered)} items")
+
+        rows = []
+        for it in filtered:
+            rows.extend(mapper(it, pid, jid, brand_tag))
+        if not rows:
+            print(f"      ⚠️ no rows produced for {platform}")
             continue
-        except Exception as e:
-            print(f"      TikTok Shop error: {e}"); continue
 
-    return [], ("TIKTOK SHOP FAIL: 0 brand-matching products found. "
-                "TikTok Shop search pages change frequently. "
-                "Possible causes: page structure changed (selector update needed), "
-                "residential proxy blocked (check Apify plan), "
-                "or brand has no TikTok Shop listings.")
-
-
-def _grabmart(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    GrabMart — Public product search via GrabFood API.
-    Note: GrabMart uses city-based pricing. Results are Jakarta (city_id=2).
-    """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    rows = []
-    try:
-        r = requests.get(
-            "https://portal.grab.com/foodweb/v2/search",
-            params={"latlng": "-6.2088,106.8456", "keyword": brand,
-                    "offset": 0, "limit": 25, "countryCode": "ID"},
-            headers={
-                "User-Agent": "Mozilla/5.0 GrabWebApp",
-                "Accept": "application/json",
-                "X-GrabBoot": "web",
-            }, timeout=15
-        )
-        if r.ok:
-            data = r.json()
-            products = data.get("searchResult",{}).get("products",[]) or []
-            for p in products:
-                name = str(p.get("name","")).strip()[:255]
-                if not name or not any(w in name.lower() for w in brand_words): continue
-                cur = _parse_idr(p.get("price",0) or p.get("priceInLocal",0))
-                rows.append(_ecom_row(pid, brand, "GrabMart", name, cur,
-                    url=p.get("deeplink",""), img=p.get("imgUrl","")))
-        if rows: return rows, ""
-        return [], "GRABMART: 0 products (GrabMart API requires city-specific pricing; results vary by location)"
-    except Exception as e:
-        return [], f"GRABMART FAIL: {str(e)[:150]}"
-
-
-def _gomart(pid: str, brand: str, apify_token: str) -> tuple[list, str]:
-    """
-    GoMart / GoFood — Public product search.
-    Note: Results are Jakarta-based.
-    """
-    import urllib.parse
-    brand_words = brand.lower().split()
-    rows = []
-    try:
-        r = requests.get(
-            "https://gofood.co.id/api/outlets/search",
-            params={"query": brand, "latitude": -6.2088, "longitude": 106.8456, "serviceType": "MART"},
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json",
-                "X-Client-Version": "web",
-            }, timeout=15
-        )
-        if r.ok:
-            data = r.json()
-            items = data.get("data",{}).get("products",[]) or data.get("products",[]) or []
-            for p in items:
-                name = str(p.get("name","")).strip()[:255]
-                if not name or not any(w in name.lower() for w in brand_words): continue
-                cur = _parse_idr(p.get("price",0))
-                rows.append(_ecom_row(pid, brand, "GoMart", name, cur, img=p.get("imageURL","")))
-        if rows: return rows, ""
-        return [], "GOMART: 0 products (GoMart/Gofood API endpoints change frequently)"
-    except Exception as e:
-        return [], f"GOMART FAIL: {str(e)[:150]}"
-
-
-def _fetch_ecommerce(pid: str, brand: str, apify_token: str) -> tuple[int, dict]:
-    """
-    Orchestrate all five retailers. Each runs independently — one failure never blocks others.
-    Shopee + Alfamart + Indomaret use direct API calls through the Apify residential proxy.
-    Tokopedia + TikTok Shop use Apify playwright with residential proxy.
-    All prices stored as clean IDR floats; currency column hardcoded to 'IDR'.
-    """
-    print(f"   🛒 E-Commerce sweep: {brand}")
-    all_rows = []; errors = {}
-    tasks = [
-        ("Shopee",      lambda: _shopee(pid, brand, apify_token)),
-        ("Tokopedia",   lambda: _tokopedia(pid, brand, apify_token)),
-        ("Alfamart",    lambda: _alfamart(pid, brand, apify_token)),
-        ("Indomaret",   lambda: _indomaret(pid, brand, apify_token)),
-        ("TikTok Shop", lambda: _tiktok_shop(pid, brand, apify_token)),
-    ]
-    for platform, fn in tasks:
-        rows, err = fn()
-        if rows:
-            all_rows.extend(rows); print(f"   ✅ {platform}: {len(rows)} products")
-        else:
-            errors[platform] = err or "No products returned"
-            print(f"   ⚠️  {platform}: {errors[platform][:80]}")
-    if all_rows:
-        supabase.table("ecommerce_products").upsert(
-            all_rows, on_conflict="project_id,competitor_name,product_name"
-        ).execute()
-        print(f"   ✅ Saved {len(all_rows)} IDR products across {len(tasks)-len(errors)} retailers")
-    if errors:
         try:
-            supabase.table("ecommerce_scrape_log").upsert({
-                "project_id": pid, "brand_name": brand,
-                "scraped_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "failures": json.dumps(errors), "total_saved": len(all_rows),
-            }, on_conflict="project_id,brand_name").execute()
-        except Exception:
-            pass
-    return len(all_rows), errors
+            supabase.table("ecom_listings").upsert(
+                rows, on_conflict="project_id,product_id,variation_id,platform"
+            ).execute()
+            total_written += len(rows)
+            print(f"      ✅ wrote {len(rows)} ecom_listings rows")
+        except Exception as e:
+            print(f"      ❌ upsert FAILED: {str(e)[:300]}")
+            raise
 
+    return total_written
 
 
 def _filter_ig_content(data: list, format_filter: str) -> list:
@@ -1316,7 +897,7 @@ def process_job(job):
     is_tt  = plat == "TikTok"
     actors = IG if is_ig else TT
 
-    if target and not target.startswith("http") and jtype not in ("Competitor Ads (Meta)", "YouTube Intelligence", "E-Commerce Intelligence", "Trend Discovery (Hashtag)"):
+    if target and not target.startswith("http") and jtype not in ("Competitor Ads (Meta)", "YouTube Intelligence", "Trend Discovery (Hashtag)", "Ecom Listings"):
         c = target.replace("@","").strip()
         target = f"https://www.instagram.com/{c}/" if is_ig else f"https://www.tiktok.com/@{c}"
 
@@ -1716,8 +1297,15 @@ def process_job(job):
         elif jtype == "YouTube Intelligence":
             fetch_youtube_videos(pid, target)
             
-        elif jtype == "E-Commerce Intelligence":
-            _fetch_ecommerce(pid, target, apikey)
+        elif jtype == "Ecom Listings":
+            # New Competitor Analysis Phase 1 — Shopee + Tokopedia raw scraping.
+            # Config carried in scrape_jobs.ecom_config (jsonb). See ecom_run_listings.
+            cfg = job.get("ecom_config") or {}
+            if isinstance(cfg, str):
+                try:    cfg = json.loads(cfg)
+                except Exception: cfg = {}
+            n = ecom_run_listings(pid, jid, cfg, apikey)
+            print(f"   ✅ Ecom Listings job wrote {n} rows to ecom_listings")
 
         elif jtype == "Competitor Intelligence Scan":
             # ── FULL SCAN — runs all layers for a competitor brand ─────────────
@@ -1748,9 +1336,10 @@ def process_job(job):
             # Layer 3: Google Trends + News RSS (in compile_daily_snapshots)
             print("   🔍 Layer 3: Trends + News will run in next compiler cycle")
 
-            # Layer 4: E-Commerce (Tokopedia, Shopee, Alfamart, Indomaret, TikTok Shop)
-            print("   🛒 Layer 4: E-Commerce")
-            _fetch_ecommerce(pid, target, apikey)
+            # Layer 4: E-Commerce — removed 2026-06-26. The old multi-retailer
+            # sweep (_fetch_ecommerce) is superseded by the new "Ecom Listings"
+            # job type, which is more structured (per-variation, Bahasa-enrichable)
+            # and runs as its own job rather than as a layer of this scan.
 
             # Layer 5: Hashtag KOL discovery — scrape all configured brand hashtags
             if brand_hashtags:
