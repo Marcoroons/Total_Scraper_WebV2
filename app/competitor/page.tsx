@@ -648,8 +648,12 @@ export default function CompetitorAnalysisPage() {
                         >
                           {pill.label}
                         </span>
-                        {j.status === "FAILED" && j.error_message && (
-                          <div className="text-[11px] text-red-400/80 mt-1 max-w-[260px] truncate" title={j.error_message}>
+                        {j.error_message && (
+                          <div
+                            className="text-[11px] mt-1 max-w-[260px] truncate"
+                            style={{ color: j.status === "FAILED" ? "rgba(248,113,113,0.85)" : "#fbbf24" }}
+                            title={j.error_message}
+                          >
                             {j.error_message}
                           </div>
                         )}

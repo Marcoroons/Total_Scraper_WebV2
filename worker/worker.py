@@ -358,12 +358,21 @@ def _ecom_safe_int(x):
 
 def _ecom_is_official(item: dict, platform: str) -> bool:
     """Best-effort 'is official store' check across the field shapes Shopee /
-    Tokopedia actors may return. Reads both top-level booleans and nested shop dicts."""
+    Tokopedia actors may return. Reads both top-level booleans and nested shop
+    dicts; falls back to a shopName substring match because gio21/shopee-scraper
+    doesn't expose officiality as a boolean (verified 2026-06-26)."""
     if platform == "Shopee":
         if any(item.get(k) for k in ("isOfficialShop","isMall","officialShop","shopeeMall")):
             return True
         shop = item.get("shop") if isinstance(item.get("shop"), dict) else {}
-        return bool(shop.get("isOfficial") or shop.get("isShopeeMall"))
+        if shop.get("isOfficial") or shop.get("isShopeeMall"):
+            return True
+        # Heuristic: Shopee Mall / official stores almost always include
+        # "Official" or "Mall" in the shop name (e.g. "Nescafe Official Store").
+        # Imperfect — a reseller calling itself "X Official Reseller" will match —
+        # but the alternative is rejecting every item when the actor strips the flag.
+        shop_name = str(item.get("shopName") or shop.get("name") or "").lower()
+        return "official" in shop_name or " mall" in shop_name or shop_name.endswith("mall")
     if platform == "Tokopedia":
         if any(item.get(k) for k in ("isOfficialStore","official","isOfficial","officialStore")):
             return True
@@ -427,7 +436,9 @@ def _shopee_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
         "title":      str(raw.get("name") or raw.get("itemName") or raw.get("title") or "")[:500],
         "description": str(raw.get("description") or raw.get("desc") or "")[:8000] or None,
         "rating":     _ecom_safe_float(raw.get("rating") or raw.get("ratingStar") or raw.get("itemRating")),
-        "sold_count": _ecom_safe_int(raw.get("sold") or raw.get("historicalSold") or raw.get("soldCount")),
+        # gio21/shopee-scraper returns 'historicalSoldEstimated'; older / other
+        # actors use 'historicalSold' / 'sold' / 'soldCount'. Try all of them.
+        "sold_count": _ecom_safe_int(raw.get("historicalSoldEstimated") or raw.get("historicalSold") or raw.get("sold") or raw.get("soldCount")),
         "url":        raw.get("itemUrl") or raw.get("url"),
         "parse_confidence": "raw",
         "raw_payload": raw,
@@ -497,7 +508,7 @@ def _apply_official_filter(items: list, mode: str, platform: str) -> list:
     if mode == "non_official_only": return [it for it in items if it not in flagged]
     return items
 
-def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
+def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     """
     Run an 'Ecom Listings' scrape job.
     cfg shape (also see app/competitor/page.tsx for the UI side):
@@ -512,7 +523,10 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
       }
     Phase 1: writes raw rows to ecom_listings with parse_confidence='raw'.
     Bahasa enrichment + cross-listing aggregation land in Phase 2/3.
-    Returns the number of rows written across all platforms.
+    Returns (total_written, note) — note is a human-readable summary or
+    explanation (e.g. why 0 rows were produced). The dispatcher writes this
+    to scrape_jobs.error_message so the UI can surface zero-row outcomes
+    without forcing the user to dig into Railway logs.
     """
     platforms  = [p for p in (cfg.get("platforms") or []) if p in ECOM_ACTORS]
     if not platforms:
@@ -533,6 +547,8 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
     targets      = keywords if mode == "keyword" else shop_tgts
     per_call_cap = max(10, cap // max(1, len(targets)))
     total_written = 0
+    # Per-platform tallies for the post-run summary note.
+    notes = []
 
     for platform in platforms:
         print(f"   🛒 Ecom {platform}: {mode} mode, {len(targets)} target(s), cap {cap}")
@@ -541,11 +557,13 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
 
         seen_keys = set()
         raw_items = []
+        actor_errors = 0
         for t in targets:
             try:
                 items = runner(t, mode, per_call_cap, apify_token)
             except Exception as e:
                 print(f"      '{t}' FAILED: {str(e)[:200]}")
+                actor_errors += 1
                 continue
             for it in (items or []):
                 if not isinstance(it, dict): continue
@@ -562,8 +580,19 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
         rows = []
         for it in filtered:
             rows.extend(mapper(it, pid, jid, brand_tag))
+
         if not rows:
-            print(f"      ⚠️ no rows produced for {platform}")
+            # Why-zero diagnostic for the UI:
+            if not raw_items:
+                reason = (f"{platform}: actor returned 0 items across {len(targets)} target(s)"
+                          + (f" ({actor_errors} actor error(s))" if actor_errors else ""))
+            elif of_filter != "all" and len(filtered) == 0:
+                reason = (f"{platform}: actor returned {len(raw_items)} item(s) but all were filtered out "
+                          f"by official_store_filter='{of_filter}' — try 'all' to keep them")
+            else:
+                reason = f"{platform}: {len(raw_items)} item(s) returned but mapper produced 0 rows (check first-item keys in Railway logs)"
+            notes.append(reason)
+            print(f"      ⚠️ {reason}")
             continue
 
         try:
@@ -572,11 +601,13 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> int:
             ).execute()
             total_written += len(rows)
             print(f"      ✅ wrote {len(rows)} ecom_listings rows")
+            notes.append(f"{platform}: {len(rows)} row(s) written")
         except Exception as e:
             print(f"      ❌ upsert FAILED: {str(e)[:300]}")
             raise
 
-    return total_written
+    note = " | ".join(notes) if notes else f"completed: {total_written} rows"
+    return total_written, note
 
 
 def _filter_ig_content(data: list, format_filter: str) -> list:
@@ -1304,8 +1335,8 @@ def process_job(job):
             if isinstance(cfg, str):
                 try:    cfg = json.loads(cfg)
                 except Exception: cfg = {}
-            n = ecom_run_listings(pid, jid, cfg, apikey)
-            print(f"   ✅ Ecom Listings job wrote {n} rows to ecom_listings")
+            n, _ecom_note = ecom_run_listings(pid, jid, cfg, apikey)
+            print(f"   ✅ Ecom Listings job wrote {n} rows to ecom_listings — {_ecom_note}")
 
         elif jtype == "Competitor Intelligence Scan":
             # ── FULL SCAN — runs all layers for a competitor brand ─────────────
@@ -1398,6 +1429,17 @@ def process_job(job):
 
         print(f"✅ {jid} done.")
         db.update_job_status(supabase, jid, "COMPLETED", id_col=id_col)
+
+        # Ecom Listings jobs carry a "what happened" summary note (per-platform
+        # row counts, or why zero rows were produced). update_job_status clears
+        # error_message on COMPLETED, so write our note AFTER it so the UI can
+        # surface zero-row outcomes without forcing a Railway-logs dig.
+        _ecom_note = locals().get("_ecom_note")
+        if _ecom_note:
+            try:
+                supabase.table("scrape_jobs").update({"error_message": str(_ecom_note)[:500]}).eq(id_col, jid).execute()
+            except Exception as _e:
+                print(f"   ⚠️ ecom note write failed: {_e}")
 
     except Exception as e:
         err = str(e)[:500]
