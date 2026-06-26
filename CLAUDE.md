@@ -93,14 +93,21 @@ ALTER TABLE public.scrape_jobs ADD COLUMN IF NOT EXISTS date_multiplier numeric 
 - **Scheduled email reports** (Exporter): worker processes `scheduled_reports` at a chosen ICT time (HH:MM, stored in `send_time`). Sends a data workbook (not the formatted export yet); "rescrape before sending" toggle not yet honored.
 - **Queue:** row-select + bulk delete + bulk re-scrape; `<CatSpinner />` / Task Loading video shows while jobs are pending.
 - **Auth forms** include `autoComplete` / `name` / `id` attributes so browser password managers autofill correctly.
-- **Competitor Analysis (`/competitor`)** — Phase 1, Shopee + Tokopedia listings scraper.
+- **Competitor Analysis (`/competitor`)** — Phase 1, Shopee + Tokopedia listings scraper + Excel export.
   - Job type: **`Ecom Listings`**. Config carried as `scrape_jobs.ecom_config` (jsonb):
     `{platforms, search_mode: 'keyword'|'shop', keywords[]|shop_targets[], official_store_filter: 'all'|'official_only'|'non_official_only', brand_names[], max_listings_per_platform}`.
   - Apify actors (hardcoded in `worker.py → ECOM_ACTORS`): Shopee `gio21/shopee-scraper`, Tokopedia `jupri/tokopedia-scraper`. Same `APIFY_TOKEN` env var — no new secrets.
-  - Worker writes one row per **variation** to `ecom_listings` with `parse_confidence='raw'`. Raw actor response stored in `raw_payload` (jsonb) so Phase 2 can re-parse without re-scraping.
+  - Worker writes one row per **variation** to `ecom_listings` with `parse_confidence='raw'`. Raw actor response stored in `raw_payload` (jsonb) so the exporter / Phase 2 can re-parse without re-scraping.
+  - **Excel export** (`POST /export/ecom` in `export-service`, file `export-service/ecom_export.py`): runs the Bahasa parser inline on every request (no DB persistence yet), then aggregates and writes a 4-sheet workbook. Sheets:
+    - **Products** — one row per brand, flavours collected, sorted by total sold (most popular first). Columns: Product, Flavours, Total Volume, Per-Unit Cost (IDR), Popularity (avg rating), Reviews, Total Sold, # Listings, Platforms.
+    - **By Flavour** — one row per (brand × parsed flavour) for within-brand flavour comparison.
+    - **Raw Listings** — every listing with the parser's output for spot-checking.
+    - **Notes** — caveats, regex coverage, parser limitations.
+    - Reviews count is best-effort from `raw_payload` (tries `reviewCount` / `cmt_count` / `rating_count` etc., falls back to `—`).
+    - The exporter triggers from `/competitor` directly (not the main Exporter) with optional brand + platform filters; reuses the existing `/api/export` proxy with `endpoint: "export/ecom"`.
   - **Old "Multi-Layer Intelligence" ecom sweep** (5 retailers + curl_cffi Cloudflare bypass + flat `ecommerce_products` table) was scrapped 2026-06-26. Code preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/` — see that folder's README for revival checklist.
-  - Phase 2 (TODO): Bahasa parser (bundle counts `isi N` / `lusin`, `Nml`/`Ng` volume, container classification, flavour) writes `total_units`, `unit_volume`, `unit_volume_uom`, `container_type`, `flavour`, `price_per_100ml_or_g` and flips `parse_confidence` to `high`|`needs_review`.
-  - Phase 3 (TODO): cross-listing aggregation (market + brand granularity; trimmed mean / median by n_clean; MAD outlier guard; sold-count-weighted variant).
+  - Phase 2 (TODO): **persist** the Bahasa parser output (`total_units`, `unit_volume`, `unit_volume_uom`, `container_type`, `flavour`, `price_per_100ml_or_g`) back into `ecom_listings` at scrape time and flip `parse_confidence` to `high` / `needs_review`. Same parser code as `export-service/ecom_export.py` — move into a shared module first.
+  - Phase 3 (TODO): cross-listing aggregation with median + MAD outlier guard + sold-count-weighted variant.
 
 ## Persistent agent memory
 
@@ -112,6 +119,7 @@ summary; prefer the memory files for the latest commit-by-commit status if avail
 
 > **Rule:** every commit that ships a behaviour, schema, page, or component change must add a one-line entry here in the same commit. Format: `YYYY-MM-DD — <short summary> (commit <short-sha>)`. Also update the relevant body section above when the change affects schema, features, SQL migrations, or pages.
 
+- 2026-06-26 — **Competitor Analysis Excel export**: new `/export/ecom` endpoint in the export-service with inline Bahasa parser (`export-service/ecom_export.py` — bundle / volume / container / flavour / reviews). Produces a 4-sheet workbook (Products / By Flavour / Raw Listings / Notes) sorted by total sold. Triggered from the new "Export to Excel" panel on `/competitor` with optional brand + platform filters
 - 2026-06-26 — **Exporter UX tightening**: calc metrics + builder scoped to selected function (`FUNCTION_CALC_METRICS` / `FUNCTION_SHOWS_METRICS` / `FUNCTION_SHOWS_BUILDER` in `lib/exportConfig.ts`); Comment exports hide all metric/builder controls; URL hides the builder; `content_filter='images'` hides Video Details + View Metric sections and auto-disables `details.enabled`; toggling VTR auto-enables Play Count + View Count columns in Video Details with an inline explainer
 - 2026-06-26 — **Competitor Analysis Phase 1**: scrap old Multi-Layer Intelligence ecom sweep (preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/`), drop `curl_cffi` dep, add new `Ecom Listings` job type (Shopee `gio21/shopee-scraper` + Tokopedia `jupri/tokopedia-scraper`), new `ecom_listings` table + `scrape_jobs.ecom_config` column (`sql/ecom_listings.sql`), full Competitor Analysis page replacing the ComingSoon stub
 - 2026-06-26 — Restore VTR + expose Play Count / View Count as Excel-builder columns; Instagram-only (commit 9a09389)

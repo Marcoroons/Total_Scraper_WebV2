@@ -38,7 +38,9 @@ from database import (
     get_influencer_profiles,
     get_comments,
     get_nlp_config,
+    get_ecom_listings,
 )
+from ecom_export import build_ecom_workbook
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Total Scraper Export Service", version="1.0.0")
@@ -126,6 +128,12 @@ class NLPRequest(BaseModel):
     platform: str
 
 
+class EcomRequest(BaseModel):
+    project_id: str
+    brand_filter: str | None = None      # case-insensitive ilike match; None = all brands
+    platform_filter: str | None = None   # "Shopee" | "Tokopedia" | None for all
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.post("/export/video-stats")
 def export_video_stats(req: VideoStatsRequest):
@@ -195,3 +203,27 @@ def export_nlp(req: NLPRequest):
     buf = generate_nlp_excel(df, config)
     platform_slug = req.platform.lower()
     return _xlsx_response(buf, f"nlp_analysis_{platform_slug}.xlsx")
+
+
+@app.post("/export/ecom")
+def export_ecom(req: EcomRequest):
+    """Competitor Analysis export — Phase 1 listings + inline Bahasa parser.
+    Sheets: Products / By Flavour / Raw Listings / Notes. Sorted by total sold."""
+    supabase = _supabase()
+    rows = get_ecom_listings(
+        supabase,
+        project_id=req.project_id,
+        brand_filter=req.brand_filter,
+        platform_filter=req.platform_filter,
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No ecom listings found for this project. "
+                "Run an Ecom Listings scrape from the Competitor Analysis page first."
+            ),
+        )
+    buf = build_ecom_workbook(rows, brand_filter=req.brand_filter)
+    brand_slug = (req.brand_filter or "all").lower().replace(" ", "_")
+    return _xlsx_response(buf, f"competitor_analysis_{brand_slug}.xlsx")

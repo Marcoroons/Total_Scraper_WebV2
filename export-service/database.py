@@ -165,6 +165,29 @@ def get_comments(supabase, platform: str, video_urls: list[str]) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ECOM LISTINGS  (Competitor Analysis Phase 1 table)
+# ─────────────────────────────────────────────────────────────────────────────
+def get_ecom_listings(
+    supabase,
+    project_id: str,
+    brand_filter: str | None = None,
+    platform_filter: str | None = None,
+) -> list[dict]:
+    """Fetch ecom_listings rows for a project, optionally narrowed by brand
+    or platform. Brand match is case-insensitive."""
+    q = (
+        supabase.table("ecom_listings")
+        .select("*")
+        .eq("project_id", project_id)
+    )
+    if platform_filter:
+        q = q.eq("platform", platform_filter)
+    if brand_filter:
+        q = q.ilike("brand_name", brand_filter)
+    return q.order("scraped_at", desc=True).execute().data or []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # NLP CONFIGS
 # ─────────────────────────────────────────────────────────────────────────────
 def get_nlp_config(supabase, project_id: str) -> dict:

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CheckCircle2, Loader2, Plus, RefreshCcw, ShoppingCart, Store, Tag, Trash2, X,
+  CheckCircle2, Download, Plus, RefreshCcw, ShoppingCart, Store, Tag, Trash2, X,
 } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job, type EcomJobConfig } from "@/lib/hooks/useJobs";
@@ -130,7 +130,25 @@ export default function CompetitorAnalysisPage() {
   const [previewRows,  setPreviewRows]  = useState<ListingPreviewRow[] | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // Export to Excel state
+  const [exportBrand,    setExportBrand]    = useState<string>("");   // "" = all brands
+  const [exportPlatform, setExportPlatform] = useState<string>("");   // "" = all platforms
+  const [exporting,      setExporting]      = useState(false);
+  const [exportMsg,      setExportMsg]      = useState<{ ok: boolean; text: string } | null>(null);
+
   const ecomJobs = useMemo(() => jobs.filter((j) => j.job_type === "Ecom Listings"), [jobs]);
+
+  // Distinct brand tags present in the project's listings — drives the export
+  // filter dropdown. Uses previewRows when loaded, falls back to job configs.
+  const knownBrands = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of (previewRows ?? [])) if (r.brand_name) set.add(r.brand_name);
+    for (const j of ecomJobs) {
+      const cfg = j.ecom_config as EcomJobConfig | undefined;
+      for (const b of (cfg?.brand_names ?? [])) if (b) set.add(b);
+    }
+    return Array.from(set).sort();
+  }, [previewRows, ecomJobs]);
 
   // ── Form helpers ───────────────────────────────────────────────────────────
 
@@ -226,6 +244,42 @@ export default function CompetitorAnalysisPage() {
   useEffect(() => {
     if (previewOpen) loadPreview();
   }, [previewOpen, loadPreview]);
+
+  // ── Export to Excel ─────────────────────────────────────────────────────────
+
+  async function runExport() {
+    if (!activeProjectId) return;
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint:        "export/ecom",
+          project_id:      activeProjectId,
+          brand_filter:    exportBrand    || null,
+          platform_filter: exportPlatform || null,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? `Export failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const slug = (exportBrand || "all").toLowerCase().replace(/\s+/g, "_");
+      a.href = url; a.download = `competitor_analysis_${slug}.xlsx`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportMsg({ ok: true, text: "Downloaded — check your browser's Downloads." });
+    } catch (e) {
+      setExportMsg({ ok: false, text: e instanceof Error ? e.message : "Export failed." });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -462,6 +516,72 @@ export default function CompetitorAnalysisPage() {
             Reset
           </button>
         </div>
+      </section>
+
+      {/* ── Export to Excel ──────────────────────────────────────────────── */}
+      <section className="bg-card border border-border rounded-2xl p-6 space-y-4">
+        <div>
+          <h2 className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Export to Excel</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Compiles captured listings into a workbook ranked by total sold. Inline Bahasa parser fills in
+            flavours, total volume, per-unit cost, popularity, and reviews from each listing's title +
+            description. Sheets: <span className="text-foreground">Products</span> ·
+            <span className="text-foreground"> By Flavour</span> ·
+            <span className="text-foreground"> Raw Listings</span> ·
+            <span className="text-foreground"> Notes</span>.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-muted-foreground">Brand filter</p>
+            <select
+              value={exportBrand}
+              onChange={(e) => setExportBrand(e.target.value)}
+              className={`w-full ${inputCls}`}
+            >
+              <option value="">All brands in this project</option>
+              {knownBrands.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-muted-foreground">Platform filter</p>
+            <select
+              value={exportPlatform}
+              onChange={(e) => setExportPlatform(e.target.value)}
+              className={`w-full ${inputCls}`}
+            >
+              <option value="">All platforms</option>
+              <option value="Shopee">Shopee only</option>
+              <option value="Tokopedia">Tokopedia only</option>
+            </select>
+          </div>
+        </div>
+
+        {exportMsg && (
+          <div
+            className="text-sm px-3 py-2 rounded-lg border"
+            style={{
+              borderColor: exportMsg.ok ? "rgba(52,211,153,0.4)" : "rgba(248,113,113,0.4)",
+              background:  exportMsg.ok ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
+              color:       exportMsg.ok ? "#34d399" : "#f87171",
+            }}
+          >
+            {exportMsg.text}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={runExport}
+          disabled={exporting}
+          className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-xl text-white disabled:opacity-40 transition-opacity"
+          style={{ background: ACCENT }}
+        >
+          {exporting ? (<><CatSpinner size={14} /> Building workbook…</>) : (<><Download className="w-4 h-4" /> Export Excel</>)}
+        </button>
       </section>
 
       {/* ── Recent jobs ──────────────────────────────────────────────────── */}
