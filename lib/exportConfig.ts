@@ -16,6 +16,35 @@ export const SCRAPE_FUNCTIONS = [
 
 export type FunctionKey = (typeof SCRAPE_FUNCTIONS)[number]["key"];
 
+// Which calculated metrics make sense per scrape function. Profile + URL both
+// export per-video stats, so they share the post-engagement set. Comments are
+// sentiment-classified text — none of the post-engagement formulas apply, so
+// the metric picker (and the whole builder) is hidden for Comment exports.
+export const FUNCTION_CALC_METRICS: Record<FunctionKey, string[]> = {
+  profile: ["Engagement Rate", "Applause Rate", "VTR", "Virality Rate", "CPV ($)", "Comment/View Ratio"],
+  url:     ["Engagement Rate", "Applause Rate", "VTR", "Virality Rate", "CPV ($)", "Comment/View Ratio"],
+  comment: [],
+};
+
+// Whether the Exporter UI shows raw/calc metric pickers + rates for a given
+// function. Comments don't expose any metric controls — the export compiles
+// every captured sentiment row as-is.
+export const FUNCTION_SHOWS_METRICS: Record<FunctionKey, boolean> = {
+  profile: true,
+  url:     true,
+  comment: false,
+};
+
+// Whether the Exporter UI shows the profile-audit Excel builder block
+// (preset / view_metric / content_filter / sheet toggles). URL + Comment
+// endpoints don't accept a `layout` payload, so the builder would be
+// cosmetic-only for them — hide it so the picker doesn't mislead the user.
+export const FUNCTION_SHOWS_BUILDER: Record<FunctionKey, boolean> = {
+  profile: true,
+  url:     false,
+  comment: false,
+};
+
 // Report metrics carried over from the Report Builder.
 export const REPORT_METRICS = [
   "Follower Count",      "Engagement Rate",

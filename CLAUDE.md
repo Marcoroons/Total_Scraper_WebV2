@@ -77,9 +77,15 @@ ALTER TABLE public.scrape_jobs ADD COLUMN IF NOT EXISTS date_multiplier numeric 
 - **Engagement Rate denominator depends on content type.** Reels use plays; **image posts / carousels** have no view count, so they use **followers** as the denominator — but only when the user ticked **"Fetch follower count"** on the Profile Tracker (off by default; the option is shown only for Instagram with format `All Formats` or `Images/Carousel Only`). Ticking it sets `scrape_jobs.fetch_followers=true`; the worker then does one extra Apify lookup per profile and writes to `*_influencer_profiles.followers`.
 - **Excel builder (profile-audit export, Exporter "Advanced settings" panel)** — toggles for which sheets/columns appear (`summary` / `details` / `notes`), sheet order, plus:
   - **Presets:** Detailed / Compact / Per-video / Custom (defined in `lib/exportConfig.ts → LAYOUT_PRESETS`).
-  - **view_metric:** `play_count` vs `view_count` — which captured number feeds the summary's "Views" aggregates.
-  - **content_filter:** `all` / `videos` / `images` — limit the export to one content type.
+  - **view_metric:** `play_count` vs `view_count` — which captured number feeds the summary's "Views" aggregates. Hidden when `content_filter='images'` (irrelevant).
+  - **content_filter:** `all` / `videos` / `images` — limit the export to one content type. Picking `images` auto-disables and hides the Video Details sheet card.
   - An empty `layout` on the wire = the full default workbook (export-service treats it that way).
+- **Exporter metric pickers are scoped to the selected function type** (`lib/exportConfig.ts → FUNCTION_CALC_METRICS` / `FUNCTION_SHOWS_METRICS` / `FUNCTION_SHOWS_BUILDER`):
+  - **Profile**: full builder (raw + calc metrics, rates, Excel builder).
+  - **URL**: metric pickers only — the Excel builder is hidden because `/api/export` doesn't accept a `layout` for the URL endpoint.
+  - **Comment**: everything hidden — comment exports just compile every captured sentiment row as-is, no metric controls.
+  - **All**: union of relevant metrics + full builder visible (mixed selections retain full control).
+  - When VTR is toggled ON, the Video Details sheet's Play Count + View Count columns auto-enable (VTR = View / Play needs both columns in the workbook to be verifiable).
 - **Profile-audit date window:** worker over-fetches `limit × date_multiplier` (user-set, 1–5×) to reach `date_from`; the export filters rows to the chosen window (the data tables accumulate across scrapes).
 - **TikTok hashtag scrapes are region-locked to Indonesia** (ID proxy + `authorMeta.region == "ID"`). Instagram hashtags can't be region-locked (warn users to use ID-centric hashtags).
 - **KOL Finder** (`/kol-finder`): ranks `trend_discovery` authors by reach/engagement/frequency; flags creators already scraped (global `influencer_profiles`); hashtag filter.
@@ -106,6 +112,7 @@ summary; prefer the memory files for the latest commit-by-commit status if avail
 
 > **Rule:** every commit that ships a behaviour, schema, page, or component change must add a one-line entry here in the same commit. Format: `YYYY-MM-DD — <short summary> (commit <short-sha>)`. Also update the relevant body section above when the change affects schema, features, SQL migrations, or pages.
 
+- 2026-06-26 — **Exporter UX tightening**: calc metrics + builder scoped to selected function (`FUNCTION_CALC_METRICS` / `FUNCTION_SHOWS_METRICS` / `FUNCTION_SHOWS_BUILDER` in `lib/exportConfig.ts`); Comment exports hide all metric/builder controls; URL hides the builder; `content_filter='images'` hides Video Details + View Metric sections and auto-disables `details.enabled`; toggling VTR auto-enables Play Count + View Count columns in Video Details with an inline explainer
 - 2026-06-26 — **Competitor Analysis Phase 1**: scrap old Multi-Layer Intelligence ecom sweep (preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/`), drop `curl_cffi` dep, add new `Ecom Listings` job type (Shopee `gio21/shopee-scraper` + Tokopedia `jupri/tokopedia-scraper`), new `ecom_listings` table + `scrape_jobs.ecom_config` column (`sql/ecom_listings.sql`), full Competitor Analysis page replacing the ComingSoon stub
 - 2026-06-26 — Restore VTR + expose Play Count / View Count as Excel-builder columns; Instagram-only (commit 9a09389)
 - 2026-06-26 — Builder metric controls + follower-based engagement rate for image posts (`fetch_followers` opt-in on Profile Tracker; new SQL `follower_engagement.sql` + `view_count.sql`) (commit ec1487c)

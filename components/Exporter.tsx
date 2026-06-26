@@ -10,6 +10,7 @@ import {
   EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS,
   buildBatchExportPayload, batchExportFilename, formatDateTime, type FunctionKey,
   DEFAULT_LAYOUT, LAYOUT_PRESETS, type ExportLayout, type LayoutPreset, type SheetKey,
+  FUNCTION_CALC_METRICS, FUNCTION_SHOWS_METRICS, FUNCTION_SHOWS_BUILDER,
 } from "@/lib/exportConfig";
 import { CALC_METRICS } from "@/components/MetricsSelector";
 
@@ -203,14 +204,44 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     () => Array.from(new Set(exportableSelected.map((j) => j.platform))),
     [exportableSelected]
   );
+  // Calc metrics are scoped by BOTH platform (TikTok has no VTR) and the
+  // chosen scrape function (Comments have no post-engagement metrics at all).
+  // When fnFilter='all', use the union of relevant metrics so a mixed
+  // selection isn't artificially narrowed.
   const availableCalc = useMemo(() => {
-    const set = new Set<string>();
     const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
-    for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) set.add(m);
-    // VTR = view count / play count; derivable now that both are captured (it's an
-    // Instagram-only metric, already absent from the TikTok CALC_METRICS list).
-    return Array.from(set);
-  }, [selectedPlatforms]);
+    const platformSet = new Set<string>();
+    for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) platformSet.add(m);
+    const fnSet: Set<string> = fnFilter === "all"
+      ? new Set(SCRAPE_FUNCTIONS.flatMap((f) => FUNCTION_CALC_METRICS[f.key]))
+      : new Set(FUNCTION_CALC_METRICS[fnFilter]);
+    return Array.from(platformSet).filter((m) => fnSet.has(m));
+  }, [selectedPlatforms, fnFilter]);
+
+  // Which UI blocks render depends on the active function filter.
+  const showsMetrics = fnFilter === "all" ? true : FUNCTION_SHOWS_METRICS[fnFilter];
+  const showsBuilder = fnFilter === "all" ? true : FUNCTION_SHOWS_BUILDER[fnFilter];
+  const showsProfileAuditOpts = fnFilter === "all" || fnFilter === "profile";
+  const imagesOnly = layout.content_filter === "images";
+
+  // Drop selected calc metrics that aren't available under the current filter
+  // so we never send the export-service a metric it can't compute.
+  useEffect(() => {
+    setCalcMetrics((prev) => {
+      const allowed = new Set(availableCalc);
+      const next = prev.filter((m) => allowed.has(m));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [availableCalc]);
+
+  // When the user picks Images only, the Video Details sheet (and the play /
+  // view per-video columns inside it) becomes meaningless — auto-disable so
+  // the export-service doesn't get conflicting instructions.
+  useEffect(() => {
+    if (imagesOnly) {
+      setLayout((L) => L.details.enabled ? { ...L, details: { ...L.details, enabled: false } } : L);
+    }
+  }, [imagesOnly]);
   const profileKols = useMemo(
     () => Array.from(new Set(
       exportableSelected
@@ -220,8 +251,21 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     [exportableSelected]
   );
   const cpvOn = calcMetrics.includes("CPV ($)");
+  const vtrOn = calcMetrics.includes("VTR");
   function toggleCalc(m: string) {
-    setCalcMetrics((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
+    setCalcMetrics((prev) => {
+      const next = prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m];
+      // VTR needs both Play Count and View Count columns in the Video Details
+      // sheet to be verifiable inside the workbook. Auto-enable both when the
+      // user turns VTR on; don't fight the user if they manually untoggle later.
+      if (m === "VTR" && !prev.includes("VTR")) {
+        setLayout((L) => ({
+          ...L,
+          details: { ...L.details, enabled: true, play: true, view: true },
+        }));
+      }
+      return next;
+    });
   }
   const RAW_OPTIONS = ["Likes", "Comments", "Shares"];
   function toggleRaw(m: string) {
@@ -468,25 +512,40 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           <div className="bg-card border border-border rounded-xl p-5">
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-3">Export now</p>
 
-            {/* Profile-audit video ordering */}
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Sort videos by</label>
-            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className={`${selectCls} w-full mb-3`}>
-              <option value="Most Recent">Most Recent</option>
-              <option value="Oldest">Oldest</option>
-              <option value="Most Views">Most Views</option>
-              <option value="Least Views">Least Views</option>
-            </select>
-            <div className="flex flex-wrap gap-4 mb-4">
-              <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
-                <input type="checkbox" checked={inclTop5} onChange={(e) => setInclTop5(e.target.checked)} className="accent-primary" />
-                Top 5 avg
-              </label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
-                <input type="checkbox" checked={inclBot5} onChange={(e) => setInclBot5(e.target.checked)} className="accent-primary" />
-                Bottom 5 avg
-              </label>
-            </div>
+            {/* Comment exports compile every sentiment row as-is — no metric
+                pickers or builder controls are relevant, so we show a brief
+                description and skip straight to the Export button. */}
+            {!showsMetrics && (
+              <p className="text-xs text-muted-foreground mb-3">
+                Comment Sentiment exports include all captured comments + sentiment labels
+                for the selected jobs. No metric picker or builder — just compile and download.
+              </p>
+            )}
 
+            {/* Profile-audit video ordering — irrelevant for URL & Comment endpoints */}
+            {showsProfileAuditOpts && (
+              <>
+                <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Sort videos by</label>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className={`${selectCls} w-full mb-3`}>
+                  <option value="Most Recent">Most Recent</option>
+                  <option value="Oldest">Oldest</option>
+                  <option value="Most Views">Most Views</option>
+                  <option value="Least Views">Least Views</option>
+                </select>
+                <div className="flex flex-wrap gap-4 mb-4">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
+                    <input type="checkbox" checked={inclTop5} onChange={(e) => setInclTop5(e.target.checked)} className="accent-primary" />
+                    Top 5 avg
+                  </label>
+                  <label className="flex items-center gap-2 text-xs cursor-pointer text-foreground">
+                    <input type="checkbox" checked={inclBot5} onChange={(e) => setInclBot5(e.target.checked)} className="accent-primary" />
+                    Bottom 5 avg
+                  </label>
+                </div>
+              </>
+            )}
+
+            {showsMetrics && (<>
             {/* Raw columns — toggle which engagement columns appear */}
             <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Raw columns</label>
             <div className="flex flex-wrap gap-1.5 mb-3">
@@ -506,7 +565,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
 
             {/* Calculated metrics — chosen at export, not at scrape time */}
             <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Calculated metrics</label>
-            <div className="flex flex-wrap gap-1.5 mb-3">
+            <div className="flex flex-wrap gap-1.5 mb-1">
               {availableCalc.map((m) => {
                 const on = calcMetrics.includes(m);
                 return (
@@ -520,6 +579,12 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 );
               })}
             </div>
+            {vtrOn && showsBuilder && (
+              <p className="text-[11px] text-muted-foreground mb-3">
+                VTR = View Count / Play Count — both columns are auto-included in the Video Details sheet.
+              </p>
+            )}
+            {!vtrOn && <div className="mb-3" />}
 
             {cpvOn && profileKols.length > 0 && (
               <div className="mb-3 rounded-lg border border-border p-3 space-y-2" style={{ background: "var(--input)" }}>
@@ -536,8 +601,10 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 <p className="text-[11px] text-muted-foreground">CPV = rate ÷ views, per video. Leave a KOL blank to skip.</p>
               </div>
             )}
+            </>)}
 
             {/* ── Advanced export settings · Excel builder (profile-audit) ── */}
+            {showsBuilder && (
             <div className="mb-4 rounded-lg border border-border overflow-hidden" style={{ background: "var(--input)" }}>
               <button type="button" onClick={() => setAdvancedOpen((o) => !o)}
                 className="w-full flex items-center justify-between px-3 py-2.5 text-left">
@@ -565,15 +632,17 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                     <p className="text-[11px] text-muted-foreground mt-1.5">Per-video leads the file with the one-row-per-video sheet. Applies to profile-audit exports.</p>
                   </div>
 
-                  {/* View metric */}
-                  <div>
-                    <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">View metric</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {builderChip("Play Count", layout.view_metric === "play_count", () => setViewMetric("play_count"))}
-                      {builderChip("View Count", layout.view_metric === "view_count", () => setViewMetric("view_count"))}
+                  {/* View metric — irrelevant for image-only exports */}
+                  {!imagesOnly && (
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">View metric</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {builderChip("Play Count", layout.view_metric === "play_count", () => setViewMetric("play_count"))}
+                        {builderChip("View Count", layout.view_metric === "view_count", () => setViewMetric("view_count"))}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1">Instagram often reports a single figure, so these can show the same numbers.</p>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">Instagram often reports a single figure, so these can show the same numbers.</p>
-                  </div>
+                  )}
 
                   {/* Content type filter */}
                   <div>
@@ -603,28 +672,30 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                     )}
                   </div>
 
-                  {/* Video Details sheet */}
-                  <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
-                    <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
-                      <input type="checkbox" className="accent-primary" checked={layout.details.enabled}
-                        onChange={(e) => setSheetEnabled("details", e.target.checked)} />
-                      Video Details sheet
-                    </label>
-                    {layout.details.enabled && (
-                      <>
-                        <div className="flex flex-wrap gap-1.5 mt-2 pl-6">
-                          {builderChip("Type", layout.details.type, () => setDetailCol("type", !layout.details.type))}
-                          {builderChip("Play Count", layout.details.play, () => setDetailCol("play", !layout.details.play))}
-                          {builderChip("View Count", layout.details.view, () => setDetailCol("view", !layout.details.view))}
-                          {builderChip("Date posted", layout.details.date, () => setDetailCol("date", !layout.details.date))}
-                          {builderChip("Scrape range", layout.details.scrape_range, () => setDetailCol("scrape_range", !layout.details.scrape_range))}
-                          {builderChip("Sort order", layout.details.sort_order, () => setDetailCol("sort_order", !layout.details.sort_order))}
-                          {builderChip("Video URL", layout.details.url, () => setDetailCol("url", !layout.details.url))}
-                        </div>
-                        <p className="text-[11px] text-muted-foreground mt-1.5 pl-6">Raw &amp; calculated metric columns are set by the pickers above.</p>
-                      </>
-                    )}
-                  </div>
+                  {/* Video Details sheet — hidden for Images-only exports */}
+                  {!imagesOnly && (
+                    <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
+                      <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
+                        <input type="checkbox" className="accent-primary" checked={layout.details.enabled}
+                          onChange={(e) => setSheetEnabled("details", e.target.checked)} />
+                        Video Details sheet
+                      </label>
+                      {layout.details.enabled && (
+                        <>
+                          <div className="flex flex-wrap gap-1.5 mt-2 pl-6">
+                            {builderChip("Type", layout.details.type, () => setDetailCol("type", !layout.details.type))}
+                            {builderChip("Play Count", layout.details.play, () => setDetailCol("play", !layout.details.play))}
+                            {builderChip("View Count", layout.details.view, () => setDetailCol("view", !layout.details.view))}
+                            {builderChip("Date posted", layout.details.date, () => setDetailCol("date", !layout.details.date))}
+                            {builderChip("Scrape range", layout.details.scrape_range, () => setDetailCol("scrape_range", !layout.details.scrape_range))}
+                            {builderChip("Sort order", layout.details.sort_order, () => setDetailCol("sort_order", !layout.details.sort_order))}
+                            {builderChip("Video URL", layout.details.url, () => setDetailCol("url", !layout.details.url))}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground mt-1.5 pl-6">Raw &amp; calculated metric columns are set by the pickers above.</p>
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   {/* Export Notes sheet */}
                   <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
@@ -637,6 +708,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 </div>
               )}
             </div>
+            )}
 
             <p className="text-xs text-muted-foreground mb-4">
               Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Pick the calculated metrics above (profile-audit exports).
