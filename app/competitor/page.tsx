@@ -39,8 +39,8 @@ export default function CompetitorAnalysisPage() {
 
   // Job config state — product-based since 2026-06-26.
   const [platforms,    setPlatforms]    = useState<PlatformName[]>(["Shopee"]);
-  const [products,     setProducts]     = useState<{ brand: string; flavour: string }[]>([
-    { brand: "", flavour: "" },
+  const [products,     setProducts]     = useState<{ brand: string; flavour: string; volume: string; type: string }[]>([
+    { brand: "", flavour: "", volume: "", type: "" },
   ]);
   const [officialMode, setOfficialMode] = useState<EcomJobConfig["official_store_filter"]>("all");
   const [maxPerProduct, setMaxPerProduct] = useState(50);
@@ -86,18 +86,18 @@ export default function CompetitorAnalysisPage() {
 
   function reset() {
     setPlatforms(["Shopee"]);
-    setProducts([{ brand: "", flavour: "" }]);
+    setProducts([{ brand: "", flavour: "", volume: "", type: "" }]);
     setOfficialMode("all");
     setMaxPerProduct(50);
     setApifyKey("");
     setFeedback(null);
   }
 
-  function updateProduct(i: number, patch: Partial<{ brand: string; flavour: string }>) {
+  function updateProduct(i: number, patch: Partial<{ brand: string; flavour: string; volume: string; type: string }>) {
     setProducts((prev) => prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   }
   function addProduct() {
-    setProducts((prev) => [...prev, { brand: "", flavour: "" }]);
+    setProducts((prev) => [...prev, { brand: "", flavour: "", volume: "", type: "" }]);
   }
   function removeProduct(i: number) {
     setProducts((prev) => prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i));
@@ -105,7 +105,12 @@ export default function CompetitorAnalysisPage() {
 
   const cleanProducts = useMemo(
     () => products
-      .map((p) => ({ brand: p.brand.trim(), flavour: p.flavour.trim() }))
+      .map((p) => ({
+        brand:   p.brand.trim(),
+        flavour: p.flavour.trim(),
+        volume:  p.volume.trim(),
+        type:    p.type.trim(),
+      }))
       .filter((p) => p.brand.length > 0),
     [products]
   );
@@ -307,13 +312,15 @@ export default function CompetitorAnalysisPage() {
 
           <div className="space-y-2">
             {/* Header */}
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1">
+            <div className="grid grid-cols-[1.2fr_1.2fr_0.8fr_0.9fr_auto] gap-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1">
               <span>Brand</span>
               <span>Flavour <span className="lowercase opacity-60">(optional)</span></span>
+              <span>Volume <span className="lowercase opacity-60">(optional)</span></span>
+              <span>Type <span className="lowercase opacity-60">(optional)</span></span>
               <span className="w-7"></span>
             </div>
             {products.map((p, i) => (
-              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+              <div key={i} className="grid grid-cols-[1.2fr_1.2fr_0.8fr_0.9fr_auto] gap-2 items-center">
                 <input
                   type="text"
                   value={p.brand}
@@ -328,6 +335,21 @@ export default function CompetitorAnalysisPage() {
                   onChange={(e) => updateProduct(i, { flavour: e.target.value })}
                   placeholder="e.g. Latte"
                   className={inputCls}
+                />
+                <input
+                  type="text"
+                  value={p.volume}
+                  onChange={(e) => updateProduct(i, { volume: e.target.value })}
+                  placeholder="e.g. 240ml"
+                  className={inputCls}
+                />
+                <input
+                  type="text"
+                  value={p.type}
+                  onChange={(e) => updateProduct(i, { type: e.target.value })}
+                  placeholder="e.g. kaleng"
+                  className={inputCls}
+                  list="ecom-type-suggestions"
                 />
                 <button
                   type="button"
@@ -347,6 +369,13 @@ export default function CompetitorAnalysisPage() {
                 "Indomie", "Mie Sedaap", "Pop Mie", "Good Day", "Top Coffee", "Aqua"
               ].map((b) => <option key={`d-${b}`} value={b} />)}
             </datalist>
+            <datalist id="ecom-type-suggestions">
+              {/* Common Indonesian container types — same vocab the parser
+                  recognises in titles, so the user can match easily. */}
+              {["kaleng", "kotak", "karton", "dus", "botol", "pouch", "sachet", "renceng"].map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
             <button
               type="button"
               onClick={addProduct}
@@ -354,6 +383,10 @@ export default function CompetitorAnalysisPage() {
             >
               <Plus className="w-3.5 h-3.5" /> Add product
             </button>
+            <p className="text-[11px] text-muted-foreground">
+              Volume tolerates whitespace — <code>240ml</code> matches both <code>240ml</code> and <code>240 ml</code> in titles.
+              Type accepts Bahasa terms like <code>kaleng</code> / <code>kotak</code> / <code>botol</code> / <code>pouch</code>.
+            </p>
           </div>
         </div>
 

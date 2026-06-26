@@ -412,6 +412,21 @@ def _ecom_safe_int(x):
         return int(float(x))
     except (TypeError, ValueError): return None
 
+def _worker_parse_volume(s: str):
+    """Parse a user-typed volume string into (value, 'ml'|'g').
+    '240ml' → (240, 'ml'); '1L' → (1000, 'ml'); '100g' → (100, 'g'); '1kg' → (1000, 'g').
+    Returns (None, None) on unrecognised input."""
+    if not s or not s.strip(): return None, None
+    m = re.match(r"\s*(\d+(?:[.,]\d+)?)\s*([a-zA-Z]+)\b", s.strip().lower())
+    if not m: return None, None
+    val = float(m.group(1).replace(",", "."))
+    uom = m.group(2)
+    if uom == "ml":                                          return val,        "ml"
+    if uom in ("l", "lt", "ltr", "liter", "litre"):          return val * 1000, "ml"
+    if uom in ("g", "gr", "gram", "grm"):                    return val,        "g"
+    if uom in ("kg", "kgs", "kilo", "kilogram", "kilogramme"): return val * 1000, "g"
+    return None, None
+
 def _ecom_is_official(item: dict, platform: str) -> bool:
     """Best-effort 'is official store' check across the field shapes Shopee /
     Tokopedia actors may return. Reads both top-level booleans and nested shop
@@ -605,14 +620,41 @@ def _tokens(s: str) -> list:
     """Lowercase alphanumeric token split — 'Caramel Macchiato' → ['caramel','macchiato']."""
     return [t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if t]
 
-def _title_matches_product(title: str, brand: str, flavour: str) -> bool:
-    """Reject T-shirts and other-brand bleed at scrape time. The title must
-    contain ALL brand tokens AND (if flavour is set) ALL flavour tokens."""
+
+def _title_has_volume(title: str, vol_str: str) -> bool:
+    """Tolerant volume match — '240ml' user input matches '240ml', '240 ml',
+    '240 ML' in the title. If the user input doesn't parse as number+UOM,
+    falls back to a plain case-insensitive substring check."""
+    if not vol_str or not vol_str.strip():
+        return True
+    t = (title or "").lower()
+    m = re.match(r"\s*(\d+(?:[.,]\d+)?)\s*([a-z]+)", vol_str.lower())
+    if not m:
+        return vol_str.lower() in t
+    num = m.group(1).replace(",", ".")
+    uom = m.group(2)
+    return bool(re.search(rf"(?<!\d){re.escape(num)}\s*{re.escape(uom)}\b", t))
+
+
+def _title_matches_product(title: str, brand: str, flavour: str,
+                           volume: str = "", ptype: str = "") -> bool:
+    """Reject T-shirts and other-brand bleed at scrape time. Each user-supplied
+    field is a strict filter — title must contain ALL of:
+      - brand tokens     (required field)
+      - flavour tokens   (when flavour is set)
+      - volume           (when volume is set; whitespace-tolerant via regex)
+      - type tokens      (when type is set, e.g. 'kaleng' / 'kotak')
+    """
     t = " " + (title or "").lower() + " "
     for tok in _tokens(brand):
         if tok not in t:
             return False
     for tok in _tokens(flavour):
+        if tok not in t:
+            return False
+    if volume and not _title_has_volume(title, volume):
+        return False
+    for tok in _tokens(ptype):
         if tok not in t:
             return False
     return True
@@ -650,8 +692,10 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
         if not isinstance(p, dict): continue
         b = str(p.get("brand", "")).strip()
         f = str(p.get("flavour", "")).strip()
+        v = str(p.get("volume", "")).strip()
+        ty = str(p.get("type", "")).strip()
         if b:
-            products.append({"brand": b, "flavour": f})
+            products.append({"brand": b, "flavour": f, "volume": v, "type": ty})
     # Legacy fall-back: jobs queued before the redesign send keywords + brand_names.
     # Map them to single-brand products so older queued jobs still work.
     if not products:
@@ -659,7 +703,8 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
         for kw in (cfg.get("keywords") or []):
             kw_s = str(kw).strip()
             if kw_s:
-                products.append({"brand": str(legacy_brand).strip() or kw_s, "flavour": kw_s})
+                products.append({"brand": str(legacy_brand).strip() or kw_s,
+                                 "flavour": kw_s, "volume": "", "type": ""})
     if not products:
         raise ValueError("ecom_config.products must list at least one {brand, flavour} pair")
 
@@ -681,7 +726,11 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
         for prod in products:
             brand   = prod["brand"]
             flavour = prod.get("flavour", "")
-            query   = f"{brand} {flavour}".strip()
+            volume  = prod.get("volume", "")
+            ptype   = prod.get("type", "")
+            # Search query stitches together every supplied refinement. Empty
+            # fields drop out cleanly thanks to the join + strip.
+            query   = " ".join(s for s in (brand, flavour, volume, ptype) if s).strip()
             try:
                 items = runner(query, "keyword", cap_per, apify_token)
             except Exception as e:
@@ -696,7 +745,7 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             for it in (items or []):
                 if not isinstance(it, dict): continue
                 title = it.get("name") or it.get("itemName") or it.get("title") or ""
-                if not _title_matches_product(title, brand, flavour):
+                if not _title_matches_product(title, brand, flavour, volume, ptype):
                     title_dropped += 1
                     continue
                 valid.append(it)
@@ -707,12 +756,24 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             filtered = _apply_official_filter(valid, of_filter, platform, brand)
             filtered_count += len(filtered)
 
-            # Map to ecom_listings rows, tagging with the USER-SPECIFIED brand
-            # and flavour so attribution is by the user's intent, not regex.
+            # Pre-compute user-spec overlays so the per-row work is cheap.
+            user_vol_val, user_vol_uom = _worker_parse_volume(volume)
+            user_type = ptype.strip().lower() or None
+            user_flavour = flavour.strip().lower() or None
+
+            # Map to ecom_listings rows, then overlay the user-specified fields
+            # so attribution is by the user's intent. Volume / type are only
+            # overlaid when the user supplied them — otherwise we leave the
+            # mapper's null values for Phase 2 (regex) to fill in later.
             for it in filtered:
                 rs = mapper(it, pid, jid, brand)
                 for r in rs:
-                    r["flavour"] = flavour or None
+                    r["flavour"] = user_flavour
+                    if user_type:
+                        r["container_type"] = user_type
+                    if user_vol_val is not None:
+                        r["unit_volume"]     = user_vol_val
+                        r["unit_volume_uom"] = user_vol_uom
                     key = (r["product_id"], r["variation_id"])
                     if key in seen_keys: continue
                     seen_keys.add(key)

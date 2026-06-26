@@ -291,22 +291,49 @@ def _price_per_100(row: dict) -> float | None:
     return float(p) / float(v) * 100.0
 
 
+def _fmt_user_volume(val, uom) -> str:
+    """Format a persisted user-specified volume back into a label like '240 ml'
+    or '1 kg'. Used to print the product label in the Products sheet."""
+    if val is None or uom is None: return ""
+    v = float(val)
+    if uom == "ml" and v >= 1000 and (v % 1000) == 0:  return f"{int(v//1000)} L"
+    if uom == "g"  and v >= 1000 and (v % 1000) == 0:  return f"{int(v//1000)} kg"
+    return f"{int(v) if v.is_integer() else v} {uom}"
+
+
 def aggregate_by_product(parsed: list[dict]) -> list[dict]:
-    """One row per (brand, flavour) — the user's "product" concept.
+    """One row per (brand, flavour, container_type, unit_volume, uom) — the
+    user's full product tuple. Searches with different specified volumes /
+    container types produce separate rows so 'Nescafe Latte 240ml kaleng' and
+    'Nescafe Latte 220ml kaleng' don't get squashed together.
+
     Sales Volume = sum sold; Unit Price per 100ml/g = median of (per_unit_price
     / unit_volume * 100); Top Products = top 3 listings by sold; Reviews = sum.
     Groups with a different UOM are excluded from the per-100 aggregate so
     liquids and solids aren't mixed together."""
-    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in parsed:
         brand   = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
         flavour = (r.get("_flavour") or "").strip() or "(no flavour)"
-        groups[(brand, flavour)].append(r)
+        # Group key uses the DB columns (which carry the user's intent), NOT
+        # the regex-parsed values. When the user didn't specify volume/type,
+        # the DB columns are NULL and all such listings cluster into one row.
+        ctype       = (r.get("container_type") or "") or None
+        db_vol      = r.get("unit_volume")
+        db_uom      = r.get("unit_volume_uom")
+        try:
+            db_vol_f = float(db_vol) if db_vol is not None else None
+        except (TypeError, ValueError):
+            db_vol_f = None
+        key = (brand, flavour, ctype, db_vol_f, db_uom)
+        groups[key].append(r)
 
     out: list[dict] = []
-    for (brand, flavour), rows in groups.items():
-        uom = _dominant_uom(rows)
-        vol_rows = [r for r in rows if r.get("_unit_volume_uom") == uom]
+    for (brand, flavour, ctype, db_vol, db_uom), rows in groups.items():
+        # Per-100 calculation falls back to parsed unit_volume when the DB
+        # column is unset (legacy listings + "no volume specified" products).
+        uom_for_per100 = db_uom or _dominant_uom(rows)
+        vol_rows = [r for r in rows if r.get("_unit_volume_uom") == uom_for_per100]
         per_100s = [_price_per_100(r) for r in vol_rows]
 
         # Top 3 listings within this product, ranked by sold count desc.
@@ -324,18 +351,32 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             for r in ranked
         ]
 
+        # Build the product label, adding optional volume + type when present.
+        label_bits = [brand]
+        if flavour != "(no flavour)":
+            label_bits.append(flavour)
+        vol_label = _fmt_user_volume(db_vol, db_uom)
+        if vol_label:
+            label_bits.append(vol_label)
+        if ctype:
+            label_bits.append(ctype)
+        product_label = " ".join(label_bits).strip()
+
         out.append({
-            "brand":           brand,
-            "flavour":         flavour,
-            "product_label":   (f"{brand} {flavour}" if flavour != "(no flavour)" else brand).strip(),
-            "n_listings":      len(rows),
-            "sales_volume":    _sum_or_none([r["_sold"] for r in rows]),
-            "price_per_100":   _median_or_none(per_100s),
-            "price_per_100_uom": uom,        # "ml" or "g" (or None if no volumes parsed)
-            "reviews":         _sum_or_none([r["_reviews"] for r in rows]),
-            "avg_rating":      _mean_or_none([r["_rating"] for r in rows]),
-            "top_products":    top_products,
-            "platforms":       sorted({r.get("platform") for r in rows if r.get("platform")}),
+            "brand":             brand,
+            "flavour":           flavour,
+            "container_type":    ctype,
+            "user_volume":       db_vol,
+            "user_volume_uom":   db_uom,
+            "product_label":     product_label,
+            "n_listings":        len(rows),
+            "sales_volume":      _sum_or_none([r["_sold"] for r in rows]),
+            "price_per_100":     _median_or_none(per_100s),
+            "price_per_100_uom": uom_for_per100,
+            "reviews":           _sum_or_none([r["_reviews"] for r in rows]),
+            "avg_rating":        _mean_or_none([r["_rating"] for r in rows]),
+            "top_products":      top_products,
+            "platforms":         sorted({r.get("platform") for r in rows if r.get("platform")}),
         })
 
     out.sort(key=lambda r: (r["sales_volume"] is None, -(r["sales_volume"] or 0)))

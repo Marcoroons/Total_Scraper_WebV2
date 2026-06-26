@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/client";
 export interface EcomProductTarget {
   brand:   string;          // required — used as a search term AND a title-validation token
   flavour: string;          // can be "" for "track the brand overall"
+  volume:  string;          // optional, e.g. "240ml" / "1L" / "100g" — both '240ml' and '240 ml' match
+  type:    string;          // optional, e.g. "kaleng" / "kotak" / "botol" / "pouch"
 }
 
 export interface EcomJobConfig {
