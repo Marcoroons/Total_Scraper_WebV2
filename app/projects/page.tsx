@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Briefcase, Loader2, Plus, X } from "lucide-react";
+import { Briefcase, Plus, X } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 import { useProject, type Project } from "@/lib/context/ProjectContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -260,7 +261,7 @@ export default function ProjectsPage() {
       {/* Content */}
       {loading ? (
         <div className="flex items-center justify-center py-24 text-muted-foreground">
-          <Loader2 className="w-6 h-6 animate-spin" />
+          <CatSpinner size={24} />
         </div>
       ) : error ? (
         <div className="rounded-xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>

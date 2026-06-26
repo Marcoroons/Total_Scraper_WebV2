@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, ChevronDown, Download, Loader2, Mail, RotateCcw, Send, SlidersHorizontal,
+  CheckCircle2, ChevronDown, Download, Mail, RotateCcw, Send, SlidersHorizontal,
 } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import {
   EXPORT_ENDPOINTS, SCRAPE_FUNCTIONS,
@@ -230,8 +231,16 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
 
   // ── Excel builder helpers ──────────────────────────────────────────────────
   function applyPreset(p: Exclude<LayoutPreset, "custom">) {
+    // Presets define sheet/column structure; the view metric + content filter are
+    // orthogonal, so keep whatever the user already chose for those.
     setLayoutPreset(p);
-    setLayout(LAYOUT_PRESETS[p]);
+    setLayout((L) => ({ ...LAYOUT_PRESETS[p], view_metric: L.view_metric, content_filter: L.content_filter }));
+  }
+  function setViewMetric(m: "play_count" | "view_count") {
+    setLayout((L) => ({ ...L, view_metric: m }));
+  }
+  function setContentFilter(f: "all" | "videos" | "images") {
+    setLayout((L) => ({ ...L, content_filter: f }));
   }
   function setSheetEnabled(key: SheetKey, on: boolean) {
     setLayout((L) => ({ ...L, [key]: { ...L[key], enabled: on } }));
@@ -431,7 +440,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                         <button onClick={() => handleRescrape(job)} disabled={rescraping === job.job_id}
                           className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg transition-colors hover:bg-primary/10 disabled:opacity-50"
                           style={{ color: "#00c9ff" }}>
-                          {rescraping === job.job_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                          {rescraping === job.job_id ? <CatSpinner size={14} /> : <RotateCcw className="w-3.5 h-3.5" />}
                           Rescrape
                         </button>
                       ) : !canExport ? (
@@ -557,6 +566,27 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                     <p className="text-[11px] text-muted-foreground mt-1.5">Per-video leads the file with the one-row-per-video sheet. Applies to profile-audit exports.</p>
                   </div>
 
+                  {/* View metric */}
+                  <div>
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">View metric</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {builderChip("Play Count", layout.view_metric === "play_count", () => setViewMetric("play_count"))}
+                      {builderChip("View Count", layout.view_metric === "view_count", () => setViewMetric("view_count"))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1">Instagram often reports a single figure, so these can show the same numbers.</p>
+                  </div>
+
+                  {/* Content type filter */}
+                  <div>
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Content type</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {builderChip("All", layout.content_filter === "all", () => setContentFilter("all"))}
+                      {builderChip("Videos only", layout.content_filter === "videos", () => setContentFilter("videos"))}
+                      {builderChip("Images only", layout.content_filter === "images", () => setContentFilter("images"))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1">Keeps the file apples-to-apples — only the same content type is aggregated together.</p>
+                  </div>
+
                   {/* KOL Views sheet */}
                   <div className="rounded-md border border-border p-2.5" style={{ background: "var(--card)" }}>
                     <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer">
@@ -619,7 +649,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               style={{ background: "linear-gradient(135deg, #00c9ff, #0087d8)", color: "#060c18" }}
             >
               {exporting
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting {exporting.done}/{exporting.total}…</>
+                ? <><CatSpinner size={16} /> Exporting {exporting.done}/{exporting.total}…</>
                 : <><Download className="w-4 h-4" /> Export &amp; download ({exportableSelected.length} job{exportableSelected.length !== 1 ? "s" : ""}{exportGroups.length > 1 ? ` → ${exportGroups.length} files` : ""})</>}
             </button>
           </div>
@@ -671,7 +701,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               className="w-full py-3 text-sm font-semibold rounded-xl flex items-center justify-center gap-2 border transition-colors hover:bg-primary/10 disabled:opacity-40"
               style={{ borderColor: "rgba(0,201,255,0.3)", color: "#00c9ff" }}
             >
-              {scheduling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {scheduling ? <CatSpinner size={16} /> : <Send className="w-4 h-4" />}
               {scheduling ? "Scheduling…" : "Schedule email"}
             </button>
 

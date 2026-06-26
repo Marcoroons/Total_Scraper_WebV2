@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Hash, RefreshCw } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs } from "@/lib/hooks/useJobs";
 import { PlatformToggle } from "@/components/PlatformToggle";
@@ -210,7 +211,7 @@ export default function HashtagsPage() {
             </div>
             <div className="flex items-center gap-2">
               <button onClick={loadResults} title="Refresh" className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors">
-                <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                {loading ? <CatSpinner size={16} /> : <RefreshCw className="w-4 h-4" />}
               </button>
               <button onClick={exportCsv} disabled={rows.length === 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors hover:bg-primary/10 disabled:opacity-40"

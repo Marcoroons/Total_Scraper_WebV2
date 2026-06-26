@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Clock, Crown, Loader2, Trash2, UserPlus, X } from "lucide-react";
+import { Clock, Crown, Trash2, UserPlus, X } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 
 interface Member {
   user_id: string;
@@ -208,7 +209,7 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
       {/* Members list */}
       {loading ? (
         <div className="flex items-center justify-center py-8 text-muted-foreground">
-          <Loader2 className="w-5 h-5 animate-spin" />
+          <CatSpinner size={20} />
         </div>
       ) : error ? (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-3 text-sm text-destructive">{error}</div>
@@ -244,7 +245,7 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
                     className="p-1.5 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-40"
                   >
                     {removingId === m.user_id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <CatSpinner size={16} />
                     ) : (
                       <Trash2 className="w-4 h-4" />
                     )}
@@ -285,7 +286,7 @@ export function TeamMembersList({ projectId }: { projectId: string }) {
                   className="p-1.5 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-40"
                 >
                   {cancelingEmail === inv.email ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <CatSpinner size={16} />
                   ) : (
                     <X className="w-4 h-4" />
                   )}

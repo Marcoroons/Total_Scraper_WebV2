@@ -5,6 +5,7 @@ import { AlertTriangle, Download, RefreshCw, RotateCcw, Trash2, XCircle } from "
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job } from "@/lib/hooks/useJobs";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
+import { CatSpinner } from "@/components/CatSpinner";
 import { Exporter } from "@/components/Exporter";
 import { TaskLoader } from "@/components/TaskLoader";
 import { EXPORT_ENDPOINTS, buildExportPayload, exportFilename, formatDateTime } from "@/lib/exportConfig";
@@ -427,7 +428,7 @@ function JobQueuePanel({ activeProjectId, onActivity }: { activeProjectId: strin
                         )}
                         {canExport && (
                           <button onClick={() => handleExport(job)} disabled={isExporting} title={isExporting ? "Generating…" : "Download Excel"} className="p-1.5 text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-wait">
-                            {isExporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                            {isExporting ? <CatSpinner size={16} /> : <Download className="w-4 h-4" />}
                           </button>
                         )}
                       </div>

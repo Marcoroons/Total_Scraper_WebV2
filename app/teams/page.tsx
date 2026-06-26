@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useId, useState } from "react";
-import { Loader2, MoreHorizontal, Plus, Send, Trash2, X } from "lucide-react";
+import { MoreHorizontal, Plus, Send, Trash2, X } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -222,7 +223,7 @@ function TeamDetail({ team, currentUserId, onMemberChange }: {
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">
-            <Loader2 className="w-5 h-5 animate-spin" />
+            <CatSpinner size={20} />
           </div>
         ) : error ? (
           <div className="m-6 rounded-xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>
@@ -288,7 +289,7 @@ function TeamDetail({ team, currentUserId, onMemberChange }: {
                             disabled={removing === m.user_id}
                             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
                           >
-                            {removing === m.user_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            {removing === m.user_id ? <CatSpinner size={14} /> : <Trash2 className="w-3.5 h-3.5" />}
                             Remove
                           </button>
                         )}
@@ -420,7 +421,7 @@ export default function TeamsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">
-            <Loader2 className="w-5 h-5 animate-spin" />
+            <CatSpinner size={20} />
           </div>
         ) : error ? (
           <div className="rounded-xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>

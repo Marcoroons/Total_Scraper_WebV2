@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, KeyRound, Loader2, Shield, Trash2 } from "lucide-react";
+import { AlertTriangle, KeyRound, Shield, Trash2 } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 import { createClient } from "@/lib/supabase/client";
 
 const inputCls =
@@ -145,7 +146,7 @@ export default function SettingsPage() {
             className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: "linear-gradient(135deg, #00c9ff, #0087d8)", color: "#060c18" }}
           >
-            {pwLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+            {pwLoading ? <CatSpinner size={16} /> : <KeyRound className="w-4 h-4" />}
             {pwLoading ? "Updating…" : "Update password"}
           </button>
         </form>
@@ -192,7 +193,7 @@ export default function SettingsPage() {
             className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
             style={{ background: confirmText === "DELETE" ? "#ef4444" : "rgba(239,68,68,0.2)", color: confirmText === "DELETE" ? "#fff" : "#f87171" }}
           >
-            {delLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {delLoading ? <CatSpinner size={16} /> : <Trash2 className="w-4 h-4" />}
             {delLoading ? "Deleting…" : "Delete my account"}
           </button>
         </div>

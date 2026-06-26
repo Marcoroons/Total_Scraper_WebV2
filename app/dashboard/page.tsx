@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, FolderOpen, Heart, Loader2,
+  AlertTriangle, CheckCircle2, ChevronDown, Clock, Eye, FolderOpen, Heart,
   MessageCircle, Share2, type LucideIcon,
 } from "lucide-react";
+import { CatSpinner } from "@/components/CatSpinner";
 import {
   Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
@@ -261,7 +262,7 @@ export default function DashboardPage() {
           )}
         </Dropdown>
 
-        {loading && <Loader2 className="w-4 h-4 animate-spin" style={{ color: "#5a7294" }} />}
+        {loading && <CatSpinner size={16} />}
       </div>
 
       {!activeProjectId ? (
