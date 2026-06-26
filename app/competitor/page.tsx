@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CheckCircle2, Download, Plus, RefreshCcw, ShoppingCart, Store, Tag, Trash2, X,
+  CheckCircle2, Download, Plus, RefreshCcw, ShoppingCart, Trash2, X,
 } from "lucide-react";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs, type Job, type EcomJobConfig } from "@/lib/hooks/useJobs";
@@ -17,8 +17,8 @@ type PlatformName = (typeof PLATFORMS)[number];
 
 const OFFICIAL_FILTERS: { value: EcomJobConfig["official_store_filter"]; label: string; hint: string }[] = [
   { value: "all",                 label: "All sellers",        hint: "Include every seller surfaced by the search." },
-  { value: "official_only",       label: "Official store only", hint: "Only Shopee Mall / Tokopedia Official Store listings." },
-  { value: "non_official_only",   label: "Non-official only",  hint: "Skip official stores — useful for spotting reseller / grey-market pricing." },
+  { value: "official_only",       label: "Official store only", hint: "Shop name must include the BRAND + 'Official' or 'Mall' (e.g. 'Nescafe Official Store'). Filters out other brands' Mall stores." },
+  { value: "non_official_only",   label: "Non-official only",  hint: "Exclude any shop with 'Official' or 'Mall' in the name — useful for reseller / grey-market pricing." },
 ];
 
 const inputCls =
@@ -31,95 +31,19 @@ const STATUS_PILL: Record<Job["status"], { bg: string; border: string; color: st
   FAILED:          { bg: "rgba(239,68,68,0.10)",   border: "rgba(239,68,68,0.35)",   color: "#f87171", label: "Failed" },
 };
 
-// ── Tag-list input (used for keywords / shop_targets / brand_names) ─────────
-
-function TagListInput({
-  values,
-  onChange,
-  placeholder,
-  accent = ACCENT,
-}: {
-  values: string[];
-  onChange: (next: string[]) => void;
-  placeholder: string;
-  accent?: string;
-}) {
-  const [draft, setDraft] = useState("");
-
-  function commitDraft() {
-    const cleaned = draft.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-    if (cleaned.length === 0) return;
-    const next = Array.from(new Set([...values, ...cleaned]));
-    onChange(next);
-    setDraft("");
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {values.map((v) => (
-          <span
-            key={v}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border"
-            style={{ borderColor: `${accent}55`, background: `${accent}1a`, color: accent }}
-          >
-            {v}
-            <button
-              type="button"
-              onClick={() => onChange(values.filter((x) => x !== v))}
-              className="hover:opacity-70"
-              aria-label={`Remove ${v}`}
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </span>
-        ))}
-        {values.length === 0 && (
-          <span className="text-[11px] text-muted-foreground italic">No entries yet</span>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              commitDraft();
-            }
-          }}
-          onBlur={() => draft.trim() && commitDraft()}
-          placeholder={placeholder}
-          className={`flex-1 ${inputCls}`}
-        />
-        <button
-          type="button"
-          onClick={commitDraft}
-          disabled={!draft.trim()}
-          className="px-3 py-1.5 text-xs rounded-lg border border-border text-foreground hover:bg-input disabled:opacity-30 transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function CompetitorAnalysisPage() {
   const { activeProjectId, activeProjectName } = useProject();
   const { jobs, isLoading, refetch, createJobs, deleteJobs, retryJob } = useJobs(activeProjectId, { sort: "desc" });
 
-  // Job config state
+  // Job config state — product-based since 2026-06-26.
   const [platforms,    setPlatforms]    = useState<PlatformName[]>(["Shopee"]);
-  const [searchMode,   setSearchMode]   = useState<"keyword" | "shop">("keyword");
-  const [keywords,     setKeywords]     = useState<string[]>([]);
-  const [shopTargets,  setShopTargets]  = useState<string[]>([]);
-  const [brandNames,   setBrandNames]   = useState<string[]>([]);
+  const [products,     setProducts]     = useState<{ brand: string; flavour: string }[]>([
+    { brand: "", flavour: "" },
+  ]);
   const [officialMode, setOfficialMode] = useState<EcomJobConfig["official_store_filter"]>("all");
-  const [maxListings,  setMaxListings]  = useState(200);
+  const [maxPerProduct, setMaxPerProduct] = useState(50);
   const [apifyKey,     setApifyKey]     = useState("");
 
   const [queuing,     setQueuing]     = useState(false);
@@ -139,12 +63,14 @@ export default function CompetitorAnalysisPage() {
   const ecomJobs = useMemo(() => jobs.filter((j) => j.job_type === "Ecom Listings"), [jobs]);
 
   // Distinct brand tags present in the project's listings — drives the export
-  // filter dropdown. Uses previewRows when loaded, falls back to job configs.
+  // filter dropdown. Uses previewRows when loaded, falls back to job configs
+  // (both new-shape `products[].brand` and legacy `brand_names[]`).
   const knownBrands = useMemo(() => {
     const set = new Set<string>();
     for (const r of (previewRows ?? [])) if (r.brand_name) set.add(r.brand_name);
     for (const j of ecomJobs) {
       const cfg = j.ecom_config as EcomJobConfig | undefined;
+      for (const p of (cfg?.products ?? [])) if (p?.brand) set.add(p.brand);
       for (const b of (cfg?.brand_names ?? [])) if (b) set.add(b);
     }
     return Array.from(set).sort();
@@ -160,30 +86,40 @@ export default function CompetitorAnalysisPage() {
 
   function reset() {
     setPlatforms(["Shopee"]);
-    setSearchMode("keyword");
-    setKeywords([]);
-    setShopTargets([]);
-    setBrandNames([]);
+    setProducts([{ brand: "", flavour: "" }]);
     setOfficialMode("all");
-    setMaxListings(200);
+    setMaxPerProduct(50);
     setApifyKey("");
     setFeedback(null);
   }
+
+  function updateProduct(i: number, patch: Partial<{ brand: string; flavour: string }>) {
+    setProducts((prev) => prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  }
+  function addProduct() {
+    setProducts((prev) => [...prev, { brand: "", flavour: "" }]);
+  }
+  function removeProduct(i: number) {
+    setProducts((prev) => prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i));
+  }
+
+  const cleanProducts = useMemo(
+    () => products
+      .map((p) => ({ brand: p.brand.trim(), flavour: p.flavour.trim() }))
+      .filter((p) => p.brand.length > 0),
+    [products]
+  );
 
   const validationErrors = useMemo(() => {
     const errs: string[] = [];
     if (!activeProjectId) errs.push("Select a project first.");
     if (platforms.length === 0) errs.push("Pick at least one platform.");
-    if (searchMode === "keyword" && keywords.length === 0)
-      errs.push("Add at least one keyword (e.g. 'coklat', 'susu uht', 'kaleng').");
-    if (searchMode === "shop" && shopTargets.length === 0)
-      errs.push("Add at least one shop URL or @username to scan.");
-    if (brandNames.length === 0)
-      errs.push("Add at least one brand name — the first is used to tag the listings.");
-    if (maxListings < 10 || maxListings > 1000)
-      errs.push("Max listings per platform must be between 10 and 1000.");
+    if (cleanProducts.length === 0)
+      errs.push("Add at least one product — fill in a brand (flavour is optional).");
+    if (maxPerProduct < 10 || maxPerProduct > 200)
+      errs.push("Max listings per product must be between 10 and 200.");
     return errs;
-  }, [activeProjectId, platforms, searchMode, keywords, shopTargets, brandNames, maxListings]);
+  }, [activeProjectId, platforms, cleanProducts, maxPerProduct]);
 
   async function queueJob() {
     if (validationErrors.length || !activeProjectId) return;
@@ -192,21 +128,22 @@ export default function CompetitorAnalysisPage() {
     try {
       const config: EcomJobConfig = {
         platforms,
-        search_mode: searchMode,
-        keywords: searchMode === "keyword" ? keywords : undefined,
-        shop_targets: searchMode === "shop" ? shopTargets : undefined,
+        products: cleanProducts,
         official_store_filter: officialMode,
-        brand_names: brandNames,
-        max_listings_per_platform: maxListings,
+        max_listings_per_product: maxPerProduct,
       };
-      const tagBrand = brandNames[0] || "competitor-scrape";
+      // First brand tags the job row for at-a-glance identification in Recent Jobs.
+      const tagBrand = cleanProducts[0]?.brand || "competitor-scrape";
+      const targetSummary = cleanProducts
+        .map((p) => p.flavour ? `${p.brand} ${p.flavour}` : p.brand)
+        .join(", ");
       await createJobs([{
         project_id: activeProjectId,
         job_type:   "Ecom Listings",
         platform:   platforms.join("+"),
-        target_url: searchMode === "keyword" ? keywords.join(", ") : shopTargets.join(", "),
+        target_url: targetSummary,
         kol_username: tagBrand,
-        target_limit: maxListings,
+        target_limit: maxPerProduct * cleanProducts.length,
         ecom_config:  config,
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
       }]);
@@ -352,75 +289,72 @@ export default function CompetitorAnalysisPage() {
           </div>
         </div>
 
-        {/* Search mode */}
+        {/* Products to track ─── brand + flavour pairs.
+            Each row drives ONE search per platform (query = "{brand} {flavour}")
+            and a strict title-match check at scrape time so we only keep
+            listings that actually carry the brand AND the flavour. */}
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">Search mode</p>
-          <div className="flex gap-2">
-            {(["keyword", "shop"] as const).map((m) => {
-              const active = searchMode === m;
-              const Icon = m === "keyword" ? Tag : Store;
-              return (
+          <div className="flex items-end justify-between gap-2">
+            <div>
+              <p className="text-xs text-muted-foreground">Products to track</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Each row → one search per platform with the brand + flavour as the query.
+                A listing is only kept if its title contains <em>both</em> the brand and the flavour.
+                Leave flavour blank to track the brand overall.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {/* Header */}
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1">
+              <span>Brand</span>
+              <span>Flavour <span className="lowercase opacity-60">(optional)</span></span>
+              <span className="w-7"></span>
+            </div>
+            {products.map((p, i) => (
+              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                <input
+                  type="text"
+                  value={p.brand}
+                  onChange={(e) => updateProduct(i, { brand: e.target.value })}
+                  placeholder="e.g. Nescafe"
+                  className={inputCls}
+                  list="ecom-brand-suggestions"
+                />
+                <input
+                  type="text"
+                  value={p.flavour}
+                  onChange={(e) => updateProduct(i, { flavour: e.target.value })}
+                  placeholder="e.g. Latte"
+                  className={inputCls}
+                />
                 <button
-                  key={m}
                   type="button"
-                  onClick={() => setSearchMode(m)}
-                  className="flex items-center gap-2 px-4 py-2 text-sm rounded-xl border transition-colors"
-                  style={{
-                    background: active ? `${ACCENT}1a` : "transparent",
-                    borderColor: active ? `${ACCENT}88` : "var(--border)",
-                    color: active ? ACCENT : "var(--foreground)",
-                  }}
+                  onClick={() => removeProduct(i)}
+                  disabled={products.length === 1}
+                  className="w-7 h-7 inline-flex items-center justify-center rounded-md border border-border text-muted-foreground hover:text-red-400 disabled:opacity-30"
+                  aria-label="Remove product"
                 >
-                  <Icon className="w-4 h-4" />
-                  {m === "keyword" ? "Search by keyword" : "Scan specific shops"}
+                  <X className="w-3.5 h-3.5" />
                 </button>
-              );
-            })}
+              </div>
+            ))}
+            <datalist id="ecom-brand-suggestions">
+              {knownBrands.map((b) => <option key={b} value={b} />)}
+              {/* Common Indonesian competitor brands as default suggestions. */}
+              {["Nescafe", "Cimory", "Ultra Milk", "Greenfields", "Indomilk", "Diamond", "Oatside",
+                "Indomie", "Mie Sedaap", "Pop Mie", "Good Day", "Top Coffee", "Aqua"
+              ].map((b) => <option key={`d-${b}`} value={b} />)}
+            </datalist>
+            <button
+              type="button"
+              onClick={addProduct}
+              className="inline-flex items-center gap-1.5 text-xs text-primary hover:opacity-80"
+            >
+              <Plus className="w-3.5 h-3.5" /> Add product
+            </button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            {searchMode === "keyword"
-              ? "One search per keyword (e.g. 'coklat', 'kaleng'). Dedupes by product_id across keywords."
-              : "Paste shop URLs or @handles — the actor resolves them to a catalog."}
-          </p>
-        </div>
-
-        {/* Targets */}
-        {searchMode === "keyword" ? (
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Keywords</p>
-            <TagListInput
-              values={keywords}
-              onChange={setKeywords}
-              placeholder="e.g. coklat, susu uht, kaleng — press Enter or comma"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Mix flavour terms (<code>coklat</code>, <code>stroberi</code>) with container terms
-              (<code>kaleng</code>, <code>kotak</code>) to seed the cross-listing aggregation later.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Shop URLs / usernames</p>
-            <TagListInput
-              values={shopTargets}
-              onChange={setShopTargets}
-              placeholder="e.g. https://shopee.co.id/cimoryofficial or @cimoryofficial"
-            />
-          </div>
-        )}
-
-        {/* Brand names */}
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">Brand names (for tagging)</p>
-          <TagListInput
-            values={brandNames}
-            onChange={setBrandNames}
-            placeholder="e.g. Cimory, Ultra Milk, Greenfields — first is used as the row tag"
-          />
-          <p className="text-[11px] text-muted-foreground">
-            The first brand tags every listing this run produces. Future enrichment (Phase 2) will
-            attribute listings back to a competitor at aggregation time.
-          </p>
         </div>
 
         {/* Official store filter */}
@@ -450,20 +384,20 @@ export default function CompetitorAnalysisPage() {
           </div>
         </div>
 
-        {/* Max listings + Apify */}
+        {/* Max per product + Apify */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Max listings per platform</p>
+            <p className="text-xs text-muted-foreground">Max listings per product</p>
             <input
               type="number"
               min={10}
-              max={1000}
+              max={200}
               step={10}
-              value={maxListings}
-              onChange={(e) => setMaxListings(parseInt(e.target.value || "0", 10))}
+              value={maxPerProduct}
+              onChange={(e) => setMaxPerProduct(parseInt(e.target.value || "0", 10))}
               className={`w-full ${inputCls}`}
             />
-            <p className="text-[11px] text-muted-foreground">10–1000. Divided across keywords / shops.</p>
+            <p className="text-[11px] text-muted-foreground">10–200. Cap per (brand, flavour) search before the title-validation filter.</p>
           </div>
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">Apify API key (optional override)</p>
@@ -627,7 +561,14 @@ export default function CompetitorAnalysisPage() {
                 {ecomJobs.map((j) => {
                   const pill = STATUS_PILL[j.status];
                   const cfg = (j.ecom_config ?? {}) as EcomJobConfig;
-                  const targets = (cfg.search_mode === "shop" ? cfg.shop_targets : cfg.keywords) ?? [];
+                  // New-shape: list product labels. Legacy: fall back to the
+                  // pre-redesign keywords/shop_targets so old jobs still read OK.
+                  const targets: string[] = cfg.products?.length
+                    ? cfg.products.map((p) => p.flavour ? `${p.brand} ${p.flavour}` : p.brand)
+                    : (cfg.search_mode === "shop" ? cfg.shop_targets : cfg.keywords) ?? [];
+                  const modeLabel = cfg.products?.length
+                    ? `${cfg.products.length} product${cfg.products.length === 1 ? "" : "s"}`
+                    : (cfg.search_mode ?? "—");
                   return (
                     <tr key={j.job_id} className="border-b border-border/40">
                       <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">
@@ -636,7 +577,7 @@ export default function CompetitorAnalysisPage() {
                         })}
                       </td>
                       <td className="py-2 pr-3">{j.kol_username || "—"}</td>
-                      <td className="py-2 pr-3 text-muted-foreground">{cfg.search_mode ?? "—"}</td>
+                      <td className="py-2 pr-3 text-muted-foreground">{modeLabel}</td>
                       <td className="py-2 pr-3">{j.platform}</td>
                       <td className="py-2 pr-3 max-w-[260px] truncate" title={targets.join(", ")}>
                         {targets.length ? targets.join(", ") : "—"}

@@ -557,107 +557,190 @@ def _tokopedia_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
         })
     return rows
 
-def _apply_official_filter(items: list, mode: str, platform: str) -> list:
-    if mode == "all" or not mode: return items
-    flagged = [it for it in items if _ecom_is_official(it, platform)]
-    if mode == "official_only":     return flagged
-    if mode == "non_official_only": return [it for it in items if it not in flagged]
+def _shop_name_of(item: dict) -> str:
+    """Pull the shop name out of either the top-level or nested-shop shape."""
+    sn = item.get("shopName") or item.get("shop_name") or ""
+    if not sn and isinstance(item.get("shop"), dict):
+        sn = item["shop"].get("name") or ""
+    return str(sn).strip()
+
+
+def _is_brand_official_shop(shop_name: str, brand: str) -> bool:
+    """Strict 'official store for THIS brand' check.
+    gio21/shopee-scraper doesn't expose isMall/isOfficial as a boolean, and a
+    bare 'official' substring lets random brands' Mall stores slip through
+    (verified — Nescafe scrapes were pulling in Wings, Auzy, Maxfood etc.).
+    Require shopName to contain ALL brand tokens AND an 'official'/'mall' marker."""
+    sn = (shop_name or "").lower()
+    if not sn:
+        return False
+    if "official" not in sn and "mall" not in sn:
+        return False
+    for tok in _tokens(brand):
+        if tok not in sn:
+            return False
+    return bool(_tokens(brand))
+
+
+def _apply_official_filter(items: list, mode: str, platform: str, brand: str) -> list:
+    """
+    mode='all'                — no filter.
+    mode='official_only'      — shop must be the BRAND's official store
+                                (shopName has all brand tokens + 'official'/'mall').
+    mode='non_official_only'  — exclude ANY shop with 'official'/'mall' in the name,
+                                regardless of brand (we don't want Mall noise here).
+    """
+    if mode == "all" or not mode:
+        return items
+    if mode == "official_only":
+        return [it for it in items if _is_brand_official_shop(_shop_name_of(it), brand)]
+    if mode == "non_official_only":
+        def _any_official(it):
+            sn = _shop_name_of(it).lower()
+            return "official" in sn or "mall" in sn
+        return [it for it in items if not _any_official(it)]
     return items
+
+def _tokens(s: str) -> list:
+    """Lowercase alphanumeric token split — 'Caramel Macchiato' → ['caramel','macchiato']."""
+    return [t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if t]
+
+def _title_matches_product(title: str, brand: str, flavour: str) -> bool:
+    """Reject T-shirts and other-brand bleed at scrape time. The title must
+    contain ALL brand tokens AND (if flavour is set) ALL flavour tokens."""
+    t = " " + (title or "").lower() + " "
+    for tok in _tokens(brand):
+        if tok not in t:
+            return False
+    for tok in _tokens(flavour):
+        if tok not in t:
+            return False
+    return True
+
 
 def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     """
     Run an 'Ecom Listings' scrape job.
     cfg shape (also see app/competitor/page.tsx for the UI side):
       {
-        "platforms":                 ["Shopee","Tokopedia"],   # at least one
-        "search_mode":               "keyword" | "shop",
-        "keywords":                  [str, ...],               # required if mode='keyword'
-        "shop_targets":              [str, ...],               # required if mode='shop' (URLs / handles)
-        "official_store_filter":     "all" | "official_only" | "non_official_only",
-        "brand_names":               [str, ...],               # first one tags listings
-        "max_listings_per_platform": int (10..1000, default 200),
+        "platforms":               ["Shopee","Tokopedia"],
+        "products":                [{ "brand": str, "flavour": str }, ...],
+        "official_store_filter":   "all" | "official_only" | "non_official_only",
+        "max_listings_per_product": int (10..200, default 50),
       }
-    Phase 1: writes raw rows to ecom_listings with parse_confidence='raw'.
-    Bahasa enrichment + cross-listing aggregation land in Phase 2/3.
-    Returns (total_written, note) — note is a human-readable summary or
-    explanation (e.g. why 0 rows were produced). The dispatcher writes this
-    to scrape_jobs.error_message so the UI can surface zero-row outcomes
-    without forcing the user to dig into Railway logs.
+    For each product:
+      - Search the actor with query = "{brand} {flavour}".
+      - Title-validate the results: ALL brand tokens AND ALL flavour tokens
+        must appear in the listing title (case-insensitive). Drops T-shirts,
+        other brands, and Shopee's loose-relevance bleed.
+      - Tag the surviving rows with brand_name=product.brand AND
+        flavour=product.flavour, persisting the user's intent directly to the
+        ecom_listings columns (no regex guessing).
+    Returns (total_written, note).
     """
-    platforms  = [p for p in (cfg.get("platforms") or []) if p in ECOM_ACTORS]
+    platforms = [p for p in (cfg.get("platforms") or []) if p in ECOM_ACTORS]
     if not platforms:
         raise ValueError("ecom_config.platforms must include 'Shopee' and/or 'Tokopedia'")
-    mode       = (cfg.get("search_mode") or "keyword").lower()
-    of_filter  = (cfg.get("official_store_filter") or "all").lower()
-    keywords   = [str(k).strip() for k in (cfg.get("keywords") or []) if str(k).strip()]
-    shop_tgts  = [str(s).strip() for s in (cfg.get("shop_targets") or []) if str(s).strip()]
-    brands     = [str(b).strip() for b in (cfg.get("brand_names") or []) if str(b).strip()]
-    brand_tag  = brands[0] if brands else None
-    cap        = max(10, min(int(cfg.get("max_listings_per_platform") or 200), 1000))
+    of_filter = (cfg.get("official_store_filter") or "all").lower()
+    cap_per   = max(10, min(int(cfg.get("max_listings_per_product") or 50), 200))
 
-    if mode == "keyword" and not keywords:
-        raise ValueError("search_mode='keyword' but no keywords provided")
-    if mode == "shop" and not shop_tgts:
-        raise ValueError("search_mode='shop' but no shop_targets provided")
+    # ── Build the product list, accepting both the new shape and the legacy ──
+    products: list = []
+    for p in (cfg.get("products") or []):
+        if not isinstance(p, dict): continue
+        b = str(p.get("brand", "")).strip()
+        f = str(p.get("flavour", "")).strip()
+        if b:
+            products.append({"brand": b, "flavour": f})
+    # Legacy fall-back: jobs queued before the redesign send keywords + brand_names.
+    # Map them to single-brand products so older queued jobs still work.
+    if not products:
+        legacy_brand = (cfg.get("brand_names") or [""])[0]
+        for kw in (cfg.get("keywords") or []):
+            kw_s = str(kw).strip()
+            if kw_s:
+                products.append({"brand": str(legacy_brand).strip() or kw_s, "flavour": kw_s})
+    if not products:
+        raise ValueError("ecom_config.products must list at least one {brand, flavour} pair")
 
-    targets      = keywords if mode == "keyword" else shop_tgts
-    per_call_cap = max(10, cap // max(1, len(targets)))
     total_written = 0
-    # Per-platform tallies for the post-run summary note.
-    notes = []
+    notes: list = []
 
     for platform in platforms:
-        print(f"   🛒 Ecom {platform}: {mode} mode, {len(targets)} target(s), cap {cap}")
+        print(f"   🛒 Ecom {platform}: {len(products)} product(s), cap {cap_per}/product")
         runner = _shopee_run if platform == "Shopee" else _tokopedia_run
         mapper = _shopee_to_rows if platform == "Shopee" else _tokopedia_to_rows
 
-        seen_keys = set()
-        raw_items = []
+        platform_rows: list = []
+        seen_keys: set = set()
         actor_errors = 0
-        for t in targets:
+        raw_count = 0
+        filtered_count = 0
+        title_dropped = 0
+
+        for prod in products:
+            brand   = prod["brand"]
+            flavour = prod.get("flavour", "")
+            query   = f"{brand} {flavour}".strip()
             try:
-                items = runner(t, mode, per_call_cap, apify_token)
+                items = runner(query, "keyword", cap_per, apify_token)
             except Exception as e:
-                print(f"      '{t}' FAILED: {str(e)[:200]}")
+                print(f"      '{query}' FAILED: {str(e)[:200]}")
                 actor_errors += 1
                 continue
+            raw_count += len(items or [])
+
+            # Title-validate FIRST (cheapest filter) — drops T-shirts and other
+            # brands' products before we even consider the official-store check.
+            valid: list = []
             for it in (items or []):
                 if not isinstance(it, dict): continue
-                key = str(it.get("itemId") or it.get("id") or it.get("url") or "")
-                if not key or key in seen_keys: continue
-                seen_keys.add(key)
-                raw_items.append(it)
-                if len(raw_items) >= cap: break
-            if len(raw_items) >= cap: break
+                title = it.get("name") or it.get("itemName") or it.get("title") or ""
+                if not _title_matches_product(title, brand, flavour):
+                    title_dropped += 1
+                    continue
+                valid.append(it)
 
-        filtered = _apply_official_filter(raw_items, of_filter, platform)
-        print(f"      after official_store_filter='{of_filter}': {len(filtered)} items")
+            # Then apply the user's official-store filter on the survivors.
+            # Brand-strict: official_only requires shopName to contain the
+            # brand tokens AND 'official'/'mall' — see _is_brand_official_shop.
+            filtered = _apply_official_filter(valid, of_filter, platform, brand)
+            filtered_count += len(filtered)
 
-        rows = []
-        for it in filtered:
-            rows.extend(mapper(it, pid, jid, brand_tag))
+            # Map to ecom_listings rows, tagging with the USER-SPECIFIED brand
+            # and flavour so attribution is by the user's intent, not regex.
+            for it in filtered:
+                rs = mapper(it, pid, jid, brand)
+                for r in rs:
+                    r["flavour"] = flavour or None
+                    key = (r["product_id"], r["variation_id"])
+                    if key in seen_keys: continue
+                    seen_keys.add(key)
+                    platform_rows.append(r)
 
-        if not rows:
-            # Why-zero diagnostic for the UI:
-            if not raw_items:
-                reason = (f"{platform}: actor returned 0 items across {len(targets)} target(s)"
-                          + (f" ({actor_errors} actor error(s))" if actor_errors else ""))
-            elif of_filter != "all" and len(filtered) == 0:
-                reason = (f"{platform}: actor returned {len(raw_items)} item(s) but all were filtered out "
-                          f"by official_store_filter='{of_filter}' — try 'all' to keep them")
+        if not platform_rows:
+            if raw_count == 0:
+                reason = f"{platform}: actor returned 0 items across {len(products)} product(s)"
+                if actor_errors: reason += f" ({actor_errors} actor error(s))"
+            elif title_dropped == raw_count:
+                reason = (f"{platform}: actor returned {raw_count} item(s) but ALL failed the "
+                          f"title-validation (brand or flavour tokens not in title)")
+            elif of_filter != "all" and filtered_count == 0:
+                reason = (f"{platform}: {raw_count - title_dropped} valid item(s) but all rejected "
+                          f"by official_store_filter='{of_filter}' — try 'all'")
             else:
-                reason = f"{platform}: {len(raw_items)} item(s) returned but mapper produced 0 rows (check first-item keys in Railway logs)"
+                reason = f"{platform}: {raw_count} returned, mapper produced 0 rows (see Railway logs)"
             notes.append(reason)
             print(f"      ⚠️ {reason}")
             continue
 
         try:
             supabase.table("ecom_listings").upsert(
-                rows, on_conflict="project_id,product_id,variation_id,platform"
+                platform_rows, on_conflict="project_id,product_id,variation_id,platform"
             ).execute()
-            total_written += len(rows)
-            print(f"      ✅ wrote {len(rows)} ecom_listings rows")
-            notes.append(f"{platform}: {len(rows)} row(s) written")
+            total_written += len(platform_rows)
+            print(f"      ✅ wrote {len(platform_rows)} rows ({raw_count} raw, {title_dropped} title-dropped)")
+            notes.append(f"{platform}: {len(platform_rows)} rows from {len(products)} product(s) ({title_dropped} title-mismatches dropped)")
         except Exception as e:
             print(f"      ❌ upsert FAILED: {str(e)[:300]}")
             raise

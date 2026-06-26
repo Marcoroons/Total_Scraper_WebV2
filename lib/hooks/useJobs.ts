@@ -4,14 +4,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
+export interface EcomProductTarget {
+  brand:   string;          // required — used as a search term AND a title-validation token
+  flavour: string;          // can be "" for "track the brand overall"
+}
+
 export interface EcomJobConfig {
   platforms: ("Shopee" | "Tokopedia")[];
-  search_mode: "keyword" | "shop";
+  products: EcomProductTarget[];                 // new — one search per product
+  official_store_filter: "all" | "official_only" | "non_official_only";
+  max_listings_per_product: number;              // cap per (brand, flavour), default 50
+
+  // ── legacy fields (still readable for jobs queued before the redesign) ──
+  search_mode?: "keyword" | "shop";
   keywords?: string[];
   shop_targets?: string[];
-  official_store_filter: "all" | "official_only" | "non_official_only";
-  brand_names: string[];
-  max_listings_per_platform: number;
+  brand_names?: string[];
+  max_listings_per_platform?: number;
 }
 
 export interface Job {

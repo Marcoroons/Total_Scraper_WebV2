@@ -191,7 +191,9 @@ def extract_reviews_count(raw_payload: Any) -> int | None:
 
 def parse_listing(row: dict) -> dict:
     """Decorate a raw ecom_listings row with parsed fields. Doesn't write back
-    to the DB — this is the transient enrichment for one export."""
+    to the DB — this is the transient enrichment for one export. Prefers the
+    DB columns when the worker already populated them (new product-based jobs
+    set `flavour` at scrape time); falls back to regex for legacy rows."""
     title = (row.get("title") or "")
     desc  = (row.get("description") or "")
     blob  = f"{title}  |  {desc}"
@@ -199,7 +201,9 @@ def parse_listing(row: dict) -> dict:
     units, _bundle_conf = parse_pack_count(blob)
     vol, uom            = parse_unit_volume(blob)
     container           = parse_container(blob)
-    flavour             = parse_flavour(blob)
+    # Worker tag wins; regex is only a fallback for listings ingested before
+    # the product-based scraper landed.
+    flavour             = (row.get("flavour") or "").strip().lower() or parse_flavour(blob)
     reviews             = extract_reviews_count(row.get("raw_payload"))
 
     listing_price = row.get("listing_price_idr")
@@ -278,66 +282,63 @@ def _dominant_uom(rows: list[dict]) -> str | None:
     return max(counts.items(), key=lambda x: x[1])[0]
 
 
-def aggregate_by_brand(parsed: list[dict]) -> list[dict]:
-    groups: dict[str, list[dict]] = defaultdict(list)
+def _price_per_100(row: dict) -> float | None:
+    """IDR per 100ml (liquids) / per 100g (solids), per single listing."""
+    p   = row.get("_per_unit_price")
+    v   = row.get("_unit_volume")
+    if p is None or v is None or v <= 0:
+        return None
+    return float(p) / float(v) * 100.0
+
+
+def aggregate_by_product(parsed: list[dict]) -> list[dict]:
+    """One row per (brand, flavour) — the user's "product" concept.
+    Sales Volume = sum sold; Unit Price per 100ml/g = median of (per_unit_price
+    / unit_volume * 100); Top Products = top 3 listings by sold; Reviews = sum.
+    Groups with a different UOM are excluded from the per-100 aggregate so
+    liquids and solids aren't mixed together."""
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in parsed:
-        key = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
-        groups[key].append(r)
+        brand   = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
+        flavour = (r.get("_flavour") or "").strip() or "(no flavour)"
+        groups[(brand, flavour)].append(r)
 
     out: list[dict] = []
-    for brand, rows in groups.items():
-        flavours = sorted({r["_flavour"] for r in rows if r.get("_flavour")})
-        uom      = _dominant_uom(rows)
+    for (brand, flavour), rows in groups.items():
+        uom = _dominant_uom(rows)
         vol_rows = [r for r in rows if r.get("_unit_volume_uom") == uom]
-        typ_unit_vol = _median_or_none([r["_unit_volume"] for r in vol_rows])
-        typ_pack     = _median_or_none([r["_total_units"] for r in rows])
-        typ_total_vol = (typ_unit_vol * typ_pack) if (typ_unit_vol and typ_pack) else None
+        per_100s = [_price_per_100(r) for r in vol_rows]
+
+        # Top 3 listings within this product, ranked by sold count desc.
+        ranked = sorted(
+            (r for r in rows if r.get("_sold") is not None),
+            key=lambda r: -(r["_sold"] or 0),
+        )[:3]
+        top_products = [
+            {
+                "title": r.get("title") or "",
+                "sold":  r.get("_sold") or 0,
+                "url":   r.get("url"),
+                "shop":  r.get("shop_name"),
+            }
+            for r in ranked
+        ]
 
         out.append({
-            "product":         brand,
-            "flavours":        flavours,
+            "brand":           brand,
+            "flavour":         flavour,
+            "product_label":   (f"{brand} {flavour}" if flavour != "(no flavour)" else brand).strip(),
             "n_listings":      len(rows),
-            "typical_volume":  typ_total_vol,
-            "volume_uom":      uom,
-            "per_unit_price":  _median_or_none([r["_per_unit_price"] for r in rows]),
-            "avg_rating":      _mean_or_none([r["_rating"] for r in rows]),
+            "sales_volume":    _sum_or_none([r["_sold"] for r in rows]),
+            "price_per_100":   _median_or_none(per_100s),
+            "price_per_100_uom": uom,        # "ml" or "g" (or None if no volumes parsed)
             "reviews":         _sum_or_none([r["_reviews"] for r in rows]),
-            "total_sold":      _sum_or_none([r["_sold"] for r in rows]),
+            "avg_rating":      _mean_or_none([r["_rating"] for r in rows]),
+            "top_products":    top_products,
             "platforms":       sorted({r.get("platform") for r in rows if r.get("platform")}),
         })
 
-    # Sort by total_sold desc — most popular first. Push None to bottom.
-    out.sort(key=lambda r: (r["total_sold"] is None, -(r["total_sold"] or 0)))
-    return out
-
-
-def aggregate_by_flavour(parsed: list[dict]) -> list[dict]:
-    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for r in parsed:
-        brand = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
-        fl    = r.get("_flavour") or "(unflavoured)"
-        groups[(brand, fl)].append(r)
-
-    out: list[dict] = []
-    for (brand, fl), rows in groups.items():
-        uom = _dominant_uom(rows)
-        vol_rows = [r for r in rows if r.get("_unit_volume_uom") == uom]
-        typ_unit_vol = _median_or_none([r["_unit_volume"] for r in vol_rows])
-        typ_pack     = _median_or_none([r["_total_units"] for r in rows])
-        typ_total_vol = (typ_unit_vol * typ_pack) if (typ_unit_vol and typ_pack) else None
-
-        out.append({
-            "product":         brand,
-            "flavour":         fl,
-            "n_listings":      len(rows),
-            "typical_volume":  typ_total_vol,
-            "volume_uom":      uom,
-            "per_unit_price":  _median_or_none([r["_per_unit_price"] for r in rows]),
-            "avg_rating":      _mean_or_none([r["_rating"] for r in rows]),
-            "reviews":         _sum_or_none([r["_reviews"] for r in rows]),
-            "total_sold":      _sum_or_none([r["_sold"] for r in rows]),
-        })
-    out.sort(key=lambda r: (r["total_sold"] is None, -(r["total_sold"] or 0)))
+    out.sort(key=lambda r: (r["sales_volume"] is None, -(r["sales_volume"] or 0)))
     return out
 
 
@@ -360,6 +361,25 @@ def _fmt_volume(val: float | None, uom: str | None) -> str:
     if uom == "g"  and val >= 1000:
         return f"{val/1000:.2f} kg"
     return f"{val:.0f} {uom}"
+
+
+def _fmt_per_100(val: float | None, uom: str | None) -> str:
+    if val is None or uom is None:
+        return "—"
+    return f"Rp {int(round(val)):,} / 100{uom}".replace(",", ".")
+
+
+def _fmt_top_products(items: list[dict]) -> str:
+    if not items:
+        return "—"
+    lines = []
+    for i, it in enumerate(items, start=1):
+        sold_str = f"{int(it.get('sold') or 0):,}".replace(",", ".")
+        title    = (it.get("title") or "").strip()
+        if len(title) > 80:
+            title = title[:78] + "…"
+        lines.append(f"{i}. {title} — {sold_str} sold")
+    return "\n".join(lines)
 
 
 def _fmt_idr(val: float | None) -> str:
@@ -396,52 +416,33 @@ def _write_header(ws, headers: list[str]) -> None:
     ws.freeze_panes = "A2"
 
 
-def _products_sheet(wb: Workbook, brand_rows: list[dict]) -> None:
+def _products_sheet(wb: Workbook, product_rows: list[dict]) -> None:
+    """One row per tracked product (brand × flavour). Sorted by Sales Volume."""
     ws = wb.create_sheet("Products")
     headers = [
-        "Product", "Flavours", "Total Volume", "Per-Unit Cost (IDR)",
-        "Popularity (avg rating)", "Reviews", "Total Sold", "# Listings", "Platforms",
+        "Product", "Sales Volume", "Unit Price per 100ml/g",
+        "Top Products (top 3 by sold)", "Reviews", "# Listings", "Platforms",
     ]
     _write_header(ws, headers)
-    for r in brand_rows:
+    for r in product_rows:
         ws.append([
-            r["product"],
-            ", ".join(r["flavours"]) if r["flavours"] else "—",
-            _fmt_volume(r["typical_volume"], r["volume_uom"]),
-            _fmt_idr(r["per_unit_price"]),
-            _fmt_rating(r["avg_rating"]),
+            r["product_label"],
+            _fmt_int(r["sales_volume"]),
+            _fmt_per_100(r["price_per_100"], r["price_per_100_uom"]),
+            _fmt_top_products(r["top_products"]),
             _fmt_int(r["reviews"]),
-            _fmt_int(r["total_sold"]),
             r["n_listings"],
             ", ".join(r["platforms"]) if r["platforms"] else "—",
         ])
-    for row in ws.iter_rows(min_row=2):
+    # Style: wrap "Top Products" column, give it more width and taller rows
+    # so the 3-line top list is fully visible.
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        ws.row_dimensions[row_idx].height = 60
         for c in row:
             c.alignment = _BODY_NUM_ALIGN if isinstance(c.value, (int, float)) else _BODY_ALIGN
     _autosize(ws, headers)
-
-
-def _by_flavour_sheet(wb: Workbook, flavour_rows: list[dict]) -> None:
-    ws = wb.create_sheet("By Flavour")
-    headers = [
-        "Product", "Flavour", "Total Volume", "Per-Unit Cost (IDR)",
-        "Popularity (avg rating)", "Reviews", "Total Sold", "# Listings",
-    ]
-    _write_header(ws, headers)
-    for r in flavour_rows:
-        ws.append([
-            r["product"], r["flavour"],
-            _fmt_volume(r["typical_volume"], r["volume_uom"]),
-            _fmt_idr(r["per_unit_price"]),
-            _fmt_rating(r["avg_rating"]),
-            _fmt_int(r["reviews"]),
-            _fmt_int(r["total_sold"]),
-            r["n_listings"],
-        ])
-    for row in ws.iter_rows(min_row=2):
-        for c in row:
-            c.alignment = _BODY_NUM_ALIGN if isinstance(c.value, (int, float)) else _BODY_ALIGN
-    _autosize(ws, headers)
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["D"].width = 70   # Top Products needs room
 
 
 def _raw_sheet(wb: Workbook, parsed: list[dict]) -> None:
@@ -489,23 +490,21 @@ def _notes_sheet(wb: Workbook, n_listings: int, brand_filter: str | None) -> Non
          False),
         ("", False),
         ("Sheets", True),
-        ("• Products     — one row per brand. Flavours present in the brand's listings are collected.", False),
-        ("• By Flavour   — one row per (brand × parsed flavour) so you can see which flavour is most popular within a brand.", False),
+        ("• Products     — one row per tracked product (brand × flavour), sorted by Sales Volume desc. The user-specified brand + flavour from the scrape config win; regex parsing is only a fallback for legacy listings.", False),
         ("• Raw Listings — every individual scraped listing with the parser's output, for spot-checking.", False),
         ("", False),
         ("Columns", True),
-        ("• Total Volume   — typical bundle volume = median unit_volume × median total_units, reported in the group's majority UOM. Bundles in a different UOM are excluded from this aggregate.", False),
-        ("• Per-Unit Cost  — median of (listing_price / total_units) across the group. Outlier-robust at small n.", False),
-        ("• Popularity     — average star rating across listings.", False),
-        ("• Reviews        — best-effort sum from the actor's raw_payload (reviewCount / cmt_count / rating_count). '—' if the actor didn't expose a reviews field.", False),
-        ("• Total Sold     — sum of sold_count. Used as the sort key (most popular first).", False),
+        ("• Sales Volume          — sum of sold_count (from the actor's historicalSoldEstimated). Used as the sort key — most popular first.", False),
+        ("• Unit Price per 100ml/g — median of (listing_price / total_units / unit_volume * 100) across the listings. Liquids report in ml, solids in g (majority UOM wins per group; mixed-UOM rows are excluded). '—' when no listing in the group has a parseable volume.", False),
+        ("• Top Products          — top 3 listings within this product, ranked by sold count. Format: '1. <title> — N sold'. Quickest way to see which specific SKU is driving the brand's volume.", False),
+        ("• Reviews               — sum of reviewCount across listings. Some actors don't expose a reviews field — falls back to '—'.", False),
+        ("• # Listings            — count of validated listings (title-validated against brand + flavour at scrape time).", False),
         ("", False),
         ("Parser caveats", True),
-        ("• Bahasa pack-count terms recognised: 'isi N', 'N pcs/pack/sachet', 'Nx', 'xN', '1 lusin' (=12), 'N lusin' (=N×12), 'renceng N'.", False),
-        ("• No bundle signal → total_units defaults to 1.", False),
-        ("• Volume regex captures: Nml / N L / Ng / N kg. L→×1000 (ml), kg→×1000 (g). Liquid vs solid are never mixed in one aggregate.", False),
-        ("• Flavour is a substring match against a curated Indonesian keyword list. Misses non-listed terms — extend FLAVOUR_KEYWORDS in ecom_export.py to add more.", False),
-        ("• This export runs the parser FRESH each time. Phase 2 will persist parsed fields back into ecom_listings for faster repeated exports.", False),
+        ("• Brand + flavour validation happens at scrape time — only listings whose TITLE contains ALL brand tokens AND ALL flavour tokens (case-insensitive) are kept. This filters out off-brand bleed from Shopee's loose-relevance search.", False),
+        ("• Bundle / pack-count regex: 'isi N', 'N pcs/pack/sachet', 'Nx', 'xN', '1 lusin' (=12), 'N lusin' (=N×12), 'renceng N'. No signal → total_units defaults to 1.", False),
+        ("• Volume regex: Nml / N L / Ng / N kg. L→×1000 (ml), kg→×1000 (g). Liquid vs solid never mixed in one aggregate.", False),
+        ("• Parsed fields run FRESH each export. Phase 2 will persist them back into ecom_listings so repeated exports are faster and reproducible.", False),
     ]
     for i, (text, bold) in enumerate(lines, start=1):
         c = ws.cell(row=i, column=1, value=text)
@@ -516,16 +515,14 @@ def _notes_sheet(wb: Workbook, n_listings: int, brand_filter: str | None) -> Non
 
 
 def build_ecom_workbook(rows: list[dict], brand_filter: str | None = None) -> io.BytesIO:
-    """Top-level entry: parse + aggregate + emit xlsx bytes."""
-    parsed = [parse_listing(r) for r in rows]
-    brand_rows   = aggregate_by_brand(parsed)
-    flavour_rows = aggregate_by_flavour(parsed)
+    """Top-level entry: parse + aggregate-per-product + emit xlsx bytes."""
+    parsed        = [parse_listing(r) for r in rows]
+    product_rows  = aggregate_by_product(parsed)
 
     wb = Workbook()
     wb.remove(wb.active)   # drop the default empty sheet
-    _products_sheet(wb,  brand_rows)
-    _by_flavour_sheet(wb, flavour_rows)
-    _raw_sheet(wb,        parsed)
+    _products_sheet(wb, product_rows)
+    _raw_sheet(wb,      parsed)
     _notes_sheet(wb, len(rows), brand_filter)
 
     buf = io.BytesIO()
