@@ -464,15 +464,19 @@ export default function QueuePage() {
 
   return (
     <div>
-      {/* Header — Task Loading animation sits in the empty band, right side */}
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div>
+      {/* Header — Task Loading banner fills the empty band when jobs are pending */}
+      <div className="flex items-center gap-4 mb-4">
+        <div className="flex-shrink-0">
           <h1 className="text-xl font-bold text-foreground">Queue &amp; Export</h1>
           {activeProjectName && (
             <p className="text-sm text-muted-foreground mt-0.5">{activeProjectName}</p>
           )}
         </div>
-        {tab === "queue" && queueActive && <TaskLoader />}
+        {tab === "queue" && queueActive && (
+          <div className="flex-1 min-w-0">
+            <TaskLoader />
+          </div>
+        )}
       </div>
 
       {/* Tab bar */}

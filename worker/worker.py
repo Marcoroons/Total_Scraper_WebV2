@@ -48,22 +48,78 @@ print("✅ Environment ready.\n")
 # CORE APIFY HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def call_apify(actor, run_input, token=None):
+    """Start an Apify actor run, poll until it finishes, return the dataset items.
+
+    Hardened against network / Apify hangs (2026-06-26):
+      - All HTTP calls have explicit timeouts so a dropped connection raises
+        promptly instead of leaving the worker stuck for hours.
+      - The poll loop is capped at MAX_POLLS iterations (each is up to 30s via
+        waitForFinish), so the worst case is bounded at ~30 minutes per actor
+        call rather than infinite.
+      - JSON parsing is defensive — a transient HTML error page from the API
+        gateway raises a clear exception rather than KeyError-ing on .json().
+    """
+    MAX_POLLS = 60   # 60 × ~30s waitForFinish ≈ 30 min ceiling per actor call
     tok = (token or APIFY_TOKEN).strip()
     aid = actor.replace("/","~")
     hdrs = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-    r = requests.post(f"https://api.apify.com/v2/acts/{aid}/runs", headers=hdrs, json=run_input)
-    if not r.ok: raise Exception(f"Start failed: {r.text[:300]}")
-    run_id = r.json()["data"]["id"]
-    ds_id = r.json()["data"]["defaultDatasetId"]
+
+    try:
+        r = requests.post(
+            f"https://api.apify.com/v2/acts/{aid}/runs",
+            headers=hdrs, json=run_input, timeout=60,
+        )
+    except requests.RequestException as e:
+        raise Exception(f"Apify start request failed: {str(e)[:200]}") from e
+    if not r.ok:
+        raise Exception(f"Start failed: {r.text[:300]}")
+    try:
+        start_data = r.json()["data"]
+        run_id = start_data["id"]
+        ds_id  = start_data["defaultDatasetId"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise Exception(f"Apify start returned unexpected payload: {r.text[:300]}") from e
     print(f"   ➔ Apify Run {run_id}")
-    while True:
-        sr = requests.get(f"https://api.apify.com/v2/actor-runs/{run_id}?waitForFinish=30", headers=hdrs)
-        s = sr.json()["data"]["status"]
-        if s == "SUCCEEDED": break
-        if s in ("FAILED","ABORTED","TIMED-OUT"): raise Exception(f"Apify Failed: {s}")
-    items = requests.get(f"https://api.apify.com/v2/datasets/{ds_id}/items", headers=hdrs)
-    if not items.ok: raise Exception("Dataset fetch failed")
-    return items.json()
+
+    for poll_i in range(MAX_POLLS):
+        try:
+            sr = requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}?waitForFinish=30",
+                headers=hdrs, timeout=45,
+            )
+        except requests.RequestException as e:
+            # Transient network blip — treat the next iteration as a retry rather
+            # than failing the whole job. If it persists, MAX_POLLS will cap us.
+            print(f"   ⚠️ Apify poll {poll_i+1}/{MAX_POLLS} network error: {str(e)[:120]} — retrying")
+            time.sleep(5)
+            continue
+        try:
+            s = sr.json()["data"]["status"]
+        except (ValueError, KeyError, TypeError):
+            print(f"   ⚠️ Apify poll {poll_i+1}/{MAX_POLLS} returned non-JSON: {sr.text[:120]} — retrying")
+            time.sleep(5)
+            continue
+        if s == "SUCCEEDED":
+            break
+        if s in ("FAILED","ABORTED","TIMED-OUT"):
+            raise Exception(f"Apify Failed: {s}")
+        # Else: READY / RUNNING — keep polling.
+    else:
+        raise Exception(f"Apify run {run_id} did not finish within {MAX_POLLS} polls (~30 min)")
+
+    try:
+        items = requests.get(
+            f"https://api.apify.com/v2/datasets/{ds_id}/items",
+            headers=hdrs, timeout=60,
+        )
+    except requests.RequestException as e:
+        raise Exception(f"Apify dataset fetch failed: {str(e)[:200]}") from e
+    if not items.ok:
+        raise Exception(f"Dataset fetch failed: HTTP {items.status_code}")
+    try:
+        return items.json()
+    except ValueError as e:
+        raise Exception(f"Apify dataset returned non-JSON: {items.text[:200]}") from e
 
 IG = {"video_stats":"apify/instagram-scraper","profile":"apify/instagram-scraper","comments":"apify/instagram-comment-scraper","hashtag":"apify/instagram-hashtag-scraper"}
 TT = {"video_stats":"clockworks/tiktok-scraper","profile":"clockworks/tiktok-scraper","comments":"clockworks/tiktok-comments-scraper","hashtag":"clockworks/tiktok-scraper"}
