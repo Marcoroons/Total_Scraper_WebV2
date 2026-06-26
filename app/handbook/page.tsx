@@ -74,8 +74,12 @@ const WHATS_NEW = [
     desc: "In the Exporter, open “Advanced export settings · Excel builder” to DIY the profile-audit workbook. Pick a preset — Detailed (everything), Compact (a tight one-row-per-creator overview), or Per-video (leads with the per-video table) — or go Custom: toggle which sheets appear (KOL Views, Video Details, Export Notes), choose the optional columns on each, and the file is reordered to match.",
   },
   {
-    name: "Play Count vs View Count",
-    desc: "Under the builder’s “View metric”, switch the view-based columns and averages between Play Count (total plays, including loops) and View Count (reach). Instagram increasingly reports a single figure, so the two can show the same numbers until distinct data is available; TikTok only has plays.",
+    name: "Play Count vs View Count + VTR",
+    desc: "The Excel builder’s Video Details sheet now has separate Play Count and View Count columns (toggle either off in the builder), and VTR (View-Through Rate = View Count ÷ Play Count) is selectable as a calculated metric again. Under “View metric”, switch the summary averages between Play Count (total plays, incl. loops) and View Count (reach). Instagram increasingly reports a single figure, so the two can show the same numbers and VTR reads ~100% until distinct data is available; TikTok only has plays.",
+  },
+  {
+    name: "Engagement Rate for photos (follower-based)",
+    desc: "On the Profile Tracker, tick “Fetch follower count” when scraping All Formats or Images/Carousel posts — one extra Apify lookup per creator stores the follower count. The Exporter then computes image-post Engagement Rate as (likes + comments + shares) ÷ followers, so reels and photos both produce a real ER. Reels keep views-based ER; image posts without a follower count stay N/A.",
   },
   {
     name: "Content-type filter — videos vs images",
@@ -94,7 +98,9 @@ const WHATS_NEW = [
 // ─── Metric explanations ───────────────────────────────────────────────────────
 
 const METRICS = [
-  { name: "Views / Plays", what: "How many times the video was watched. The headline reach number — but note it is NOT the same as follower count (a creator with millions of followers commonly averages far fewer views per post)." },
+  { name: "Play Count", what: "Total times a video started playing, including replays and loops — the broadest reach figure for reels. NOT the same as follower count (a creator with millions of followers commonly averages far fewer plays per post). Photos/carousels have no play count." },
+  { name: "View Count", what: "The reach-style view figure Instagram reports for a video. Instagram has largely merged 'plays' and 'views' into one number, so View Count often equals Play Count — they diverge only when the platform returns both separately. TikTok exposes only plays." },
+  { name: "VTR (View-Through Rate)", what: "View Count ÷ Play Count × 100% — the share of plays that registered as views. Reads ~100% when Instagram reports a single figure; only meaningful when plays and views differ. Instagram-only, and reels-only (photos have neither)." },
   { name: "Likes", what: "How many viewers tapped like. A light signal of approval." },
   { name: "Comments", what: "How many viewers wrote a comment. Heavier engagement than a like — people took time to respond." },
   { name: "Shares", what: "How many viewers re-shared the post. The strongest organic signal — content people pass on travels furthest." },

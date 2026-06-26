@@ -410,9 +410,16 @@ def generate_profile_audit_excel(
     if "view_count" not in df.columns:
         df["view_count"] = df["play_count"]
     df["view_count"] = pd.to_numeric(df["view_count"], errors="coerce").fillna(0).astype(int)
+    # Keep the untouched plays/views for the Play Count / View Count columns and
+    # VTR (= views / plays), since the swap below may repoint play_count.
+    df["_raw_play"] = df["play_count"]
+    df["_raw_view"] = df["view_count"]
     view_metric = _lay.get("view_metric") or "play_count"
     if view_metric == "view_count":
         df["play_count"] = df["view_count"].where(df["view_count"] > 0, df["play_count"])
+
+    det_play = _flag(_det, "play")   # Play Count column in Video Details
+    det_view = _flag(_det, "view")   # View Count column in Video Details
 
     # ── Content-type filter: keep videos, images, or both ───────────────────────
     content_filter = _lay.get("content_filter") or "all"
@@ -440,14 +447,20 @@ def generate_profile_audit_excel(
         except (TypeError, ValueError):
             pass
     cpv_on = ("CPV ($)" in (calc_metrics or [])) and len(rates_lower) > 0
+    # VTR = view_count / play_count x 100. Derivable now that plays and views are
+    # captured separately (when Instagram reports a single figure they're equal, so
+    # VTR reads ~100%). Computed per row in the detail loop, not via _CALC_FORMULAS.
+    vtr_on = "VTR" in (calc_metrics or [])
 
     sel_calc = [m for m in (calc_metrics or []) if m in _CALC_FORMULAS]
+    if vtr_on:
+        sel_calc = sel_calc + ["VTR"]
     if cpv_on:
         sel_calc = sel_calc + ["CPV ($)"]
     if not sel_calc:
         sel_calc = ["Engagement Rate"]   # sensible default so the sheet is never bare
     unsupported_calc = [m for m in (calc_metrics or [])
-                        if m == "VTR" or (m == "CPV ($)" and not cpv_on)]
+                        if (m == "CPV ($)" and not cpv_on)]
 
     # Optional raw engagement columns (default all when unspecified).
     _sel_raw = set(raw_metrics) if raw_metrics else {"Likes", "Comments", "Shares"}
@@ -675,7 +688,9 @@ def generate_profile_audit_excel(
     ws2 = wb.create_sheet("Video Details")
     detail_headers = ["KOL / Creator", "Platform"]
     if det_type: detail_headers.append("Type")
-    detail_headers += ["Video #", "Views"]
+    detail_headers.append("Video #")
+    if det_play: detail_headers.append("Play Count")
+    if det_view: detail_headers.append("View Count")
     if det_date: detail_headers.append("Date Posted")
     detail_headers += raw_cols + sel_calc
     if det_range: detail_headers.append("Scrape Range")
@@ -704,18 +719,25 @@ def generate_profile_audit_excel(
         details_group = pd.concat([vid_group, img_group]).reset_index(drop=True)
         for i, (_, vrow) in enumerate(details_group.iterrows(), 1):
             v = int(vrow["play_count"])
+            rp = int(vrow.get("_raw_play", 0) or 0)
+            rv = int(vrow.get("_raw_view", 0) or 0)
             is_vid = bool(vrow["_is_video"])
             l = int(vrow.get("likes", 0) or 0)
             c = int(vrow.get("comments", 0) or 0)
             s = int(vrow.get("shares", 0) or 0)
             row = [kol, platform_label]
             if det_type: row.append("Video" if is_vid else "Image")
-            row += [i, v]
+            row.append(i)
+            if det_play: row.append(rp)
+            if det_view: row.append(rv)
             if det_date: row.append(str(vrow.get("post_date", "") or "")[:10])
             _raw_vals = {"Likes": l, "Comments": c, "Shares": s}
             row += [_raw_vals[rc] for rc in raw_cols]
             for m in sel_calc:
-                if v <= 0:
+                if m == "VTR":
+                    # views / plays — independent of the chosen view metric.
+                    row.append(round(rv / rp * 100, 2) if rp else "N/A")
+                elif v <= 0:
                     # No view count (image post). Engagement Rate falls back to a
                     # follower-based figure when followers were captured; the other
                     # view-based rates stay N/A.
@@ -750,7 +772,7 @@ def generate_profile_audit_excel(
         ws2.column_dimensions[get_column_letter(col_idx)].width = (
             28 if header in ("KOL / Creator","Video URL") else
             16 if header == "Scrape Range" else
-            14 if header in ("Date Posted","Sort Order") else 13
+            14 if header in ("Date Posted","Sort Order","Play Count","View Count") else 13
         )
     ws2.freeze_panes = "A2"
 
@@ -786,6 +808,7 @@ def generate_profile_audit_excel(
         "Applause Rate":      "Likes / Views x 100%",
         "Virality Rate":      "Shares / Views x 100%",
         "Comment/View Ratio": "Comments / Views x 100%",
+        "VTR":                "View Count / Play Count x 100% (Instagram often reports a single figure, so this can read ~100%)",
         "CPV ($)":            "Rate ($) / Views, per video",
     }
     notes += [("", False), ("CALCULATED METRICS (Video Details sheet)", True)]

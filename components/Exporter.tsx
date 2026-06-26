@@ -207,9 +207,8 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     const set = new Set<string>();
     const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
     for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) set.add(m);
-    // VTR needs a separate view count that profile audits don't capture — drop it
-    // so the picker only offers metrics this export can actually produce.
-    set.delete("VTR");
+    // VTR = view count / play count; derivable now that both are captured (it's an
+    // Instagram-only metric, already absent from the TikTok CALC_METRICS list).
     return Array.from(set);
   }, [selectedPlatforms]);
   const profileKols = useMemo(
@@ -250,7 +249,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     setLayout((L) => ({ ...L, summary: { ...L.summary, [col]: on } }));
     setLayoutPreset("custom");
   }
-  function setDetailCol(col: "type" | "date" | "scrape_range" | "sort_order" | "url", on: boolean) {
+  function setDetailCol(col: "type" | "play" | "view" | "date" | "scrape_range" | "sort_order" | "url", on: boolean) {
     setLayout((L) => ({ ...L, details: { ...L.details, [col]: on } }));
     setLayoutPreset("custom");
   }
@@ -615,6 +614,8 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                       <>
                         <div className="flex flex-wrap gap-1.5 mt-2 pl-6">
                           {builderChip("Type", layout.details.type, () => setDetailCol("type", !layout.details.type))}
+                          {builderChip("Play Count", layout.details.play, () => setDetailCol("play", !layout.details.play))}
+                          {builderChip("View Count", layout.details.view, () => setDetailCol("view", !layout.details.view))}
                           {builderChip("Date posted", layout.details.date, () => setDetailCol("date", !layout.details.date))}
                           {builderChip("Scrape range", layout.details.scrape_range, () => setDetailCol("scrape_range", !layout.details.scrape_range))}
                           {builderChip("Sort order", layout.details.sort_order, () => setDetailCol("sort_order", !layout.details.sort_order))}

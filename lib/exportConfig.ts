@@ -41,16 +41,16 @@ export type ContentFilter = "all" | "videos" | "images";
 
 export interface ExportLayout {
   summary: { enabled: boolean; images: boolean; dates: boolean; kpi: boolean; videos: boolean };
-  details: { enabled: boolean; type: boolean; date: boolean; scrape_range: boolean; sort_order: boolean; url: boolean };
+  details: { enabled: boolean; type: boolean; play: boolean; view: boolean; date: boolean; scrape_range: boolean; sort_order: boolean; url: boolean };
   notes:   { enabled: boolean };
   order:   SheetKey[];
-  view_metric: ViewMetric;       // which captured number feeds the "Views" columns
+  view_metric: ViewMetric;       // which captured number feeds the summary "Views" aggregates
   content_filter: ContentFilter; // limit the export to one content type
 }
 
 export const DEFAULT_LAYOUT: ExportLayout = {
   summary: { enabled: true, images: true, dates: true, kpi: true, videos: true },
-  details: { enabled: true, type: true, date: true, scrape_range: true, sort_order: true, url: true },
+  details: { enabled: true, type: true, play: true, view: true, date: true, scrape_range: true, sort_order: true, url: true },
   notes:   { enabled: true },
   order:   ["summary", "details", "notes"],
   view_metric: "play_count",
@@ -66,7 +66,7 @@ export const LAYOUT_PRESETS: Record<Exclude<LayoutPreset, "custom">, ExportLayou
   // A tight one-row-per-creator overview: summary only, no per-video grid.
   compact: {
     summary: { enabled: true, images: false, dates: false, kpi: true, videos: false },
-    details: { enabled: false, type: true, date: true, scrape_range: false, sort_order: false, url: true },
+    details: { enabled: false, type: true, play: true, view: false, date: true, scrape_range: false, sort_order: false, url: true },
     notes:   { enabled: false },
     order:   ["summary", "details", "notes"],
     view_metric: "play_count",
@@ -75,7 +75,7 @@ export const LAYOUT_PRESETS: Record<Exclude<LayoutPreset, "custom">, ExportLayou
   // Lead with the per-video table; keep the summary + notes after it.
   per_video: {
     summary: { enabled: true, images: true, dates: true, kpi: true, videos: true },
-    details: { enabled: true, type: true, date: true, scrape_range: false, sort_order: false, url: true },
+    details: { enabled: true, type: true, play: true, view: true, date: true, scrape_range: false, sort_order: false, url: true },
     notes:   { enabled: true },
     order:   ["details", "summary", "notes"],
     view_metric: "play_count",
