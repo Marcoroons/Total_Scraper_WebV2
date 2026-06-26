@@ -46,6 +46,7 @@ export interface JobPayload {
   apify_api_key?: string;
   max_retries?: number;
   date_multiplier?: number;
+  fetch_followers?: boolean;
 }
 
 export function useJobs(projectId: string | null, filters: JobFilters = {}) {

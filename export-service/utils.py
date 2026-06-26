@@ -370,6 +370,12 @@ def generate_profile_audit_excel(
         _is_video_row(ct, pc) for ct, pc in zip(df["content_type"], df["play_count"])
     ]
 
+    # Follower count (profile-level) — denominator for image-post engagement rate,
+    # captured by the worker only when the user ticked "Fetch follower count".
+    if "followers" not in df.columns:
+        df["followers"] = 0
+    df["followers"] = pd.to_numeric(df["followers"], errors="coerce").fillna(0).astype(int)
+
     # ── Builder layout: which sheets/columns appear and in what order ───────────
     # The Exporter's "Advanced export settings" sends this. An empty/missing layout
     # means the full default workbook (all sheets, all columns) — so older callers
@@ -395,6 +401,25 @@ def generate_profile_audit_excel(
     det_sort    = _flag(_det, "sort_order")
     det_url     = _flag(_det, "url")
     sheet_order = _lay.get("order") if isinstance(_lay.get("order"), list) else ["summary", "details", "notes"]
+
+    # ── View metric: Play Count (total plays) vs View Count (reach) ─────────────
+    # _is_video was classified above off the original play_count. If the user picked
+    # View Count, swap the working view figure to view_count where it exists so all
+    # downstream "Views" columns/aggregates use it (falling back to plays when the
+    # platform didn't report a separate view count).
+    if "view_count" not in df.columns:
+        df["view_count"] = df["play_count"]
+    df["view_count"] = pd.to_numeric(df["view_count"], errors="coerce").fillna(0).astype(int)
+    view_metric = _lay.get("view_metric") or "play_count"
+    if view_metric == "view_count":
+        df["play_count"] = df["view_count"].where(df["view_count"] > 0, df["play_count"])
+
+    # ── Content-type filter: keep videos, images, or both ───────────────────────
+    content_filter = _lay.get("content_filter") or "all"
+    if content_filter == "videos":
+        df = df[df["_is_video"]].reset_index(drop=True)
+    elif content_filter == "images":
+        df = df[~df["_is_video"]].reset_index(drop=True)
 
     # ── Calculated-metric columns for the Video Details sheet ───────────────────
     # Honour the metrics the user selected at scrape time. Only those derivable
@@ -667,6 +692,9 @@ def generate_profile_audit_excel(
     for kol in ordered_kols:
         group = df[df["username"] == kol]
         group = _sort_group(group).reset_index(drop=True)
+        # Follower count is profile-level; take the max across the creator's rows
+        # so it still applies to posts scraped before the follower lookup existed.
+        kol_followers = int(group["followers"].max()) if len(group) else 0
         vid_group = group[group["_is_video"]]
         if limit and limit > 0:
             vid_group = vid_group.head(limit)                  # match the summary cap (videos)
@@ -688,7 +716,13 @@ def generate_profile_audit_excel(
             row += [_raw_vals[rc] for rc in raw_cols]
             for m in sel_calc:
                 if v <= 0:
-                    row.append("N/A")   # image / no-view post: view-based metric is undefined
+                    # No view count (image post). Engagement Rate falls back to a
+                    # follower-based figure when followers were captured; the other
+                    # view-based rates stay N/A.
+                    if m == "Engagement Rate" and kol_followers > 0:
+                        row.append(round((l + c + s) / kol_followers * 100, 2))
+                    else:
+                        row.append("N/A")
                 elif m == "CPV ($)":
                     _rate = rates_lower.get(str(kol).lower(), 0.0)
                     row.append(round(_rate / v, 4) if _rate else 0.0)
@@ -729,6 +763,8 @@ def generate_profile_audit_excel(
         (f"Platform: {platform_label}", False),
         (f"Video Sort Order: {sort_by}", False),
         (f"Scrape Date Range: {scrape_range}", False),
+        (f"View metric: {'View Count' if view_metric == 'view_count' else 'Play Count'}", False),
+        (f"Content included: {'Videos only' if content_filter == 'videos' else 'Images only' if content_filter == 'images' else 'All (videos + images)'}", False),
         (f"Top 5 included: {incl_top5}   |   Bottom 5 included: {incl_bot5}", False),
         ("", False),
         ("HOW TO READ THE KOL VIEWS SHEET", True),
@@ -767,7 +803,10 @@ def generate_profile_audit_excel(
         ("• The KOL Views sheet ranks and averages VIDEOS only — '# Images' shows how many "
          "photo posts were set aside so they don't drag the view averages to zero.", False),
         ("• In Video Details, image posts still list their Likes/Comments, but view-based metrics "
-         "(Engagement Rate, Applause Rate, etc.) show 'N/A' — there is no view count to divide by.", False),
+         "(Applause Rate, Virality Rate, etc.) show 'N/A' — there is no view count to divide by.", False),
+        ("• Engagement Rate for image posts is computed against FOLLOWERS instead of views "
+         "((likes + comments + shares) / followers) when a follower count was captured — tick "
+         "'Fetch follower count' on the Profile Tracker. Without it, image-post Engagement Rate is 'N/A'.", False),
         ("• A video with 0 recorded views (private/restricted) is likewise shown as 'N/A' for "
          "view-based metrics.", False),
     ]

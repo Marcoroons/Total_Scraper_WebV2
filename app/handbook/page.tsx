@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  ArrowRight, BookOpen, MessageSquare, Search, Sparkles, TrendingUp, User, Video,
+  ArrowRight, BookOpen, MessageSquare, Search, SlidersHorizontal, Sparkles, TrendingUp, User, Video,
 } from "lucide-react";
 
 // ─── Data pipeline (Pre / Post project) ───────────────────────────────────────
@@ -63,6 +63,31 @@ const FUNCTIONS = [
     name: "Hashtag / Trends", icon: TrendingUp, color: "#2dd4bf", soon: false,
     how: "Scrape top content under hashtags, then view trending creators and reverse-engineer the winning video format.",
     requires: "Hashtags to scrape.", produces: "Trend & format insights, exportable to CSV.",
+  },
+];
+
+// ─── What's new & how to use it ────────────────────────────────────────────────
+
+const WHATS_NEW = [
+  {
+    name: "Excel builder (Advanced export settings)",
+    desc: "In the Exporter, open “Advanced export settings · Excel builder” to DIY the profile-audit workbook. Pick a preset — Detailed (everything), Compact (a tight one-row-per-creator overview), or Per-video (leads with the per-video table) — or go Custom: toggle which sheets appear (KOL Views, Video Details, Export Notes), choose the optional columns on each, and the file is reordered to match.",
+  },
+  {
+    name: "Play Count vs View Count",
+    desc: "Under the builder’s “View metric”, switch the view-based columns and averages between Play Count (total plays, including loops) and View Count (reach). Instagram increasingly reports a single figure, so the two can show the same numbers until distinct data is available; TikTok only has plays.",
+  },
+  {
+    name: "Content-type filter — videos vs images",
+    desc: "“Content type” limits an export to Videos only, Images only, or All, so reels and photos aren’t aggregated together. Reels carry a view count; photos and carousels don’t — so image posts list their likes/comments but show view-based metrics (Engagement Rate, etc.) as N/A, and the KOL Views sheet averages videos only with a “# Images” tally alongside.",
+  },
+  {
+    name: "Animated task loader",
+    desc: "The loading cat now appears inline wherever something is working — exporting, scheduling, rescraping, or loading a list — in place of the old spinner.",
+  },
+  {
+    name: "Saved-password sign-in",
+    desc: "The login and sign-up forms are now recognised by browser / Google password managers, so saved credentials autofill. If your browser stored the old form, sign in once and re-save to refresh it.",
   },
 ];
 
@@ -178,6 +203,22 @@ export default function HandbookPage() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      {/* What's new */}
+      <section className="space-y-4">
+        <h2 className="text-base font-bold text-foreground flex items-center gap-2" style={{ fontFamily: "Outfit, sans-serif" }}>
+          <SlidersHorizontal className="w-4 h-4" style={{ color: "#00c9ff" }} />
+          What&apos;s new &amp; how to use it
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {WHATS_NEW.map((it) => (
+            <div key={it.name} className="rounded-2xl border p-5" style={{ background: "#0d1829", borderColor: "rgba(0,201,255,0.18)" }}>
+              <p className="text-sm font-semibold text-foreground mb-1" style={{ fontFamily: "Outfit, sans-serif" }}>{it.name}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{it.desc}</p>
+            </div>
+          ))}
         </div>
       </section>
 

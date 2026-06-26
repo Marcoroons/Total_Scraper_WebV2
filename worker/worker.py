@@ -1067,6 +1067,32 @@ def _ig_content_type(d: dict) -> str:
     return "Video" if int(d.get("videoPlayCount") or 0) > 0 else "Image"
 
 
+def _fetch_ig_followers(handle: str, apikey: str) -> int:
+    """
+    One lightweight Instagram profile-details lookup for a creator's follower
+    count. Image posts have no view count, so engagement rate for them is computed
+    against followers at export time. Only called when the user ticked "Fetch
+    follower count" for a post-related scrape. Returns 0 on any failure so the
+    scrape proceeds regardless.
+    """
+    try:
+        url = f"https://www.instagram.com/{str(handle).lstrip('@').strip()}/"
+        res = call_apify(
+            "apify/instagram-scraper",
+            {"directUrls": [url], "resultsType": "details", "resultsLimit": 1},
+            apikey,
+        )
+        for d in (res or []):
+            fc = d.get("followersCount")
+            if fc is None:
+                fc = (d.get("owner") or {}).get("followersCount")
+            if fc:
+                return int(fc)
+    except Exception as e:
+        print(f"   ⚠️ Follower lookup failed for @{handle}: {e}")
+    return 0
+
+
 def _extract_post_date(item: dict) -> str:
     """
     Best-effort YYYY-MM-DD for a scraped post, checking the many field names the
@@ -1392,6 +1418,11 @@ def process_job(job):
             if date_from or date_to:
                 print(f"   📅 Date range: {date_from or 'start'} → {date_to or 'now'}")
 
+            # Follower lookup: only for post-related scrapes (image posts need a
+            # follower-based engagement rate; reels use views) and only when the
+            # user ticked the box on the Profile Tracker.
+            fetch_followers = bool(job.get("fetch_followers")) and fmt != "Reels Only"
+
             # ── BATCH MODE: only batch with other PENDING jobs sharing the SAME date range ──
             # (Different KOLs may be queued with different ranges — batching those together
             #  would silently apply the wrong window to some handles, so we only group jobs
@@ -1590,17 +1621,27 @@ def process_job(job):
             for h in all_handles:
                 items = by_handle.get(h, [])[:eff_limit]  # date window overrides limit
                 if is_ig:
+                    foll = _fetch_ig_followers(h, apikey) if fetch_followers else 0
+                    if fetch_followers:
+                        print(f"   👥 @{h}: {foll:,} followers")
                     payload = []
                     for d in items:
                         url = d.get("url","")
                         if not url: continue
-                        play_count = int(d.get("videoPlayCount") or d.get("videoViewCount")
-                                        or d.get("viewCount") or d.get("playCount") or 0)
+                        # Plays vs views: IG exposes videoPlayCount (total plays) and
+                        # videoViewCount (reach) separately, though it often returns only
+                        # one now. Capture both; mirror so neither column is left blank.
+                        play_count = int(d.get("videoPlayCount") or d.get("playCount") or 0)
+                        view_count = int(d.get("videoViewCount") or d.get("viewCount") or 0)
+                        if not play_count: play_count = view_count
+                        if not view_count: view_count = play_count
                         payload.append({
                             "post_url":     url,
                             "username":     h,      # always use the requested handle
                             "caption":      d.get("caption",""),
                             "play_count":   play_count,
+                            "view_count":   view_count,
+                            "followers":    foll,
                             "likes":        int(d.get("likesCount",0) or 0),
                             "comments":     int(d.get("commentsCount",0) or 0),
                             "shares":       int(d.get("sharesCount",0) or 0),
@@ -1612,6 +1653,7 @@ def process_job(job):
                                 "username": h,
                                 "caption":d.get("text",""),
                                 "play_count":int(d.get("playCount") or d.get("videoPlayCount") or 0),
+                                "view_count":int(d.get("playCount") or d.get("videoPlayCount") or 0),
                                 "likes":d.get("diggCount",0),"comments":d.get("commentCount",0),
                                 "shares":d.get("shareCount",0),
                                 "post_date": _post_date(d),
@@ -1625,11 +1667,14 @@ def process_job(job):
                         print(f"   🗄️ DB upsert OK: {len(payload)} rows")
                     except Exception as db_err:
                         err_str = str(db_err)
-                        if "content_type" in err_str or "post_date" in err_str:
-                            print(f"   ⚠️ DB rejected new columns — retrying without post_date/content_type")
+                        if ("content_type" in err_str or "post_date" in err_str
+                                or "view_count" in err_str or "followers" in err_str):
+                            print(f"   ⚠️ DB rejected new columns — retrying without post_date/content_type/view_count/followers")
                             for row in payload:
                                 row.pop("content_type", None)
                                 row.pop("post_date", None)
+                                row.pop("view_count", None)
+                                row.pop("followers", None)
                             db.upsert_influencer_profiles(supabase, plat, payload)
                             print(f"   🗄️ DB upsert OK (fallback): {len(payload)} rows")
                         else:

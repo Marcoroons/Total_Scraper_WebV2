@@ -109,6 +109,7 @@ export default function ProfileTrackerPage() {
   const [dateFrom,    setDateFrom]    = useState("");
   const [dateTo,      setDateTo]      = useState("");
   const [dateMultiplier, setDateMultiplier] = useState(3);
+  const [fetchFollowers, setFetchFollowers] = useState(false);
   const [profiles,    setProfiles]    = useState<string[]>([""]);
   const [apifyKey,    setApifyKey]    = useState("");
   const [errors,      setErrors]      = useState<string[]>([]);
@@ -116,6 +117,9 @@ export default function ProfileTrackerPage() {
   const [successCount, setSuccessCount] = useState<number | null>(null);
 
   const isTikTok = platform === "TikTok";
+  // "Post-related" = the scrape will include image posts (which have no view
+  // count), so follower-based engagement rate is relevant. Reels-only has none.
+  const postRelated = !isTikTok && (format === "All Formats" || format === "Images/Carousel Only");
   const today = new Date().toISOString().split("T")[0];
   const dateInvalid = dateFrom && dateTo && dateFrom > dateTo;
 
@@ -167,6 +171,7 @@ export default function ProfileTrackerPage() {
         ...(endMode   === "specific" && dateTo   ? { date_to:   dateTo   } : {}),
         ...(((startMode === "specific" && dateFrom) || (endMode === "specific" && dateTo))
           ? { date_multiplier: dateMultiplier } : {}),
+        ...(postRelated && fetchFollowers ? { fetch_followers: true } : {}),
         ...(apifyKey.trim() ? { apify_api_key: apifyKey.trim() } : {}),
       });
     }
@@ -240,6 +245,25 @@ export default function ProfileTrackerPage() {
                 Uses the dedicated Apify Reel Scraper — chronological, excludes pinned. Cheaper and more accurate than scraping all posts.
               </p>
             )}
+          </div>
+        )}
+
+        {/* Follower count — only for post-related scrapes (image posts have no
+            view count, so engagement rate needs followers as the denominator) */}
+        {postRelated && (
+          <div className="bg-card border border-border rounded-xl p-5 space-y-2">
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={fetchFollowers}
+                onChange={(e) => setFetchFollowers(e.target.checked)}
+                className="accent-primary w-4 h-4"
+              />
+              <span className="text-sm font-medium text-foreground">Fetch follower count</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Photos &amp; carousels have no view count, so their engagement rate is calculated against followers instead. Tick this to pull each creator&apos;s follower count — it adds one extra Apify lookup per profile. Reels still use views.
+            </p>
           </div>
         )}
 
@@ -414,6 +438,9 @@ export default function ProfileTrackerPage() {
                 <div><span className="text-muted-foreground">Date range: </span><span className="text-foreground font-medium">{(startMode === "specific" && dateFrom) || "start"} → {(endMode === "specific" && dateTo) || "now"}</span></div>
                 {(startMode === "specific" || endMode === "specific") && (
                   <div><span className="text-muted-foreground">Date over-fetch: </span><span className="text-foreground font-medium">{dateMultiplier}×</span></div>
+                )}
+                {postRelated && fetchFollowers && (
+                  <div><span className="text-muted-foreground">Followers: </span><span className="text-foreground font-medium">fetched (post ER)</span></div>
                 )}
                 <div><span className="text-muted-foreground">Profiles: </span><span className="text-foreground font-medium">{previewRows.length}</span></div>
               </div>

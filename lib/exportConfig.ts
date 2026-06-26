@@ -36,11 +36,16 @@ export const DEFAULT_METRICS = [
 // wire means the full default workbook (the export-service treats it that way).
 export type SheetKey = "summary" | "details" | "notes";
 
+export type ViewMetric = "play_count" | "view_count";
+export type ContentFilter = "all" | "videos" | "images";
+
 export interface ExportLayout {
   summary: { enabled: boolean; images: boolean; dates: boolean; kpi: boolean; videos: boolean };
   details: { enabled: boolean; type: boolean; date: boolean; scrape_range: boolean; sort_order: boolean; url: boolean };
   notes:   { enabled: boolean };
   order:   SheetKey[];
+  view_metric: ViewMetric;       // which captured number feeds the "Views" columns
+  content_filter: ContentFilter; // limit the export to one content type
 }
 
 export const DEFAULT_LAYOUT: ExportLayout = {
@@ -48,6 +53,8 @@ export const DEFAULT_LAYOUT: ExportLayout = {
   details: { enabled: true, type: true, date: true, scrape_range: true, sort_order: true, url: true },
   notes:   { enabled: true },
   order:   ["summary", "details", "notes"],
+  view_metric: "play_count",
+  content_filter: "all",
 };
 
 export type LayoutPreset = "detailed" | "compact" | "per_video" | "custom";
@@ -62,6 +69,8 @@ export const LAYOUT_PRESETS: Record<Exclude<LayoutPreset, "custom">, ExportLayou
     details: { enabled: false, type: true, date: true, scrape_range: false, sort_order: false, url: true },
     notes:   { enabled: false },
     order:   ["summary", "details", "notes"],
+    view_metric: "play_count",
+    content_filter: "all",
   },
   // Lead with the per-video table; keep the summary + notes after it.
   per_video: {
@@ -69,6 +78,8 @@ export const LAYOUT_PRESETS: Record<Exclude<LayoutPreset, "custom">, ExportLayou
     details: { enabled: true, type: true, date: true, scrape_range: false, sort_order: false, url: true },
     notes:   { enabled: true },
     order:   ["details", "summary", "notes"],
+    view_metric: "play_count",
+    content_filter: "all",
   },
 };
 
