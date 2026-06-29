@@ -61,6 +61,7 @@ export default function CompetitorAnalysisPage() {
   const [officialMode, setOfficialMode] = useState<EcomJobConfig["official_store_filter"]>("all");
   const [specificShops, setSpecificShops] = useState<string>("");   // comma-separated when officialMode='specific_shops'
   const [maxPerProduct, setMaxPerProduct] = useState(50);
+  const [matchMode, setMatchMode] = useState<"strict" | "loose">("strict");
   const [apifyKey,     setApifyKey]     = useState("");
 
   const [queuing,     setQueuing]     = useState(false);
@@ -115,6 +116,7 @@ export default function CompetitorAnalysisPage() {
     setOfficialMode("all");
     setSpecificShops("");
     setMaxPerProduct(50);
+    setMatchMode("strict");
     setApifyKey("");
     setFeedback(null);
   }
@@ -172,6 +174,7 @@ export default function CompetitorAnalysisPage() {
         official_store_filter: officialMode,
         ...(officialMode === "specific_shops" ? { specific_shops: shopList } : {}),
         max_listings_per_product: maxPerProduct,
+        match_mode: matchMode,
       };
       // First brand tags the job row for at-a-glance identification in Recent Jobs.
       const tagBrand = cleanProducts[0]?.brand || "competitor-scrape";
@@ -533,7 +536,34 @@ export default function CompetitorAnalysisPage() {
           who's selling what before you commit to a filter.
         </div>
 
-        {/* Max per product + Apify */}
+        {/* Match mode + Max per product + Apify */}
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">Matching strictness</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {([
+              { v: "strict" as const, label: "Strict (default)", hint: "Listing's title must contain ALL of brand + flavour + volume + type. Best precision, lower recall — Shopee may simply not have many SKUs matching all 4 fields." },
+              { v: "loose"  as const, label: "Loose", hint: "Listing's title needs only brand + flavour. Volume + type still go into the search query but aren't enforced on results. Use when Strict returns too few rows (e.g. spelling variants like 'cappucino' vs 'cappuccino')." },
+            ]).map((m) => {
+              const active = matchMode === m.v;
+              return (
+                <button
+                  key={m.v}
+                  type="button"
+                  onClick={() => setMatchMode(m.v)}
+                  className="text-left px-3 py-2 rounded-xl border transition-colors"
+                  style={{
+                    background: active ? `${ACCENT}1a` : "transparent",
+                    borderColor: active ? `${ACCENT}88` : "var(--border)",
+                  }}
+                >
+                  <div className="text-sm font-medium" style={{ color: active ? ACCENT : "var(--foreground)" }}>{m.label}</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">{m.hint}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">Max listings per product</p>
@@ -546,7 +576,7 @@ export default function CompetitorAnalysisPage() {
               onChange={(e) => setMaxPerProduct(parseInt(e.target.value || "0", 10))}
               className={`w-full ${inputCls}`}
             />
-            <p className="text-[11px] text-muted-foreground">10–200. Cap per (brand, flavour) search before the title-validation filter.</p>
+            <p className="text-[11px] text-muted-foreground">10–200. Hard cap per search. If Shopee simply doesn&apos;t have this many matching SKUs, you get fewer — that&apos;s expected.</p>
           </div>
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">Apify API key (optional override)</p>

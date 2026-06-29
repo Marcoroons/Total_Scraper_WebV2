@@ -22,6 +22,14 @@ export interface EcomJobConfig {
   // Marketplace ISO-2 code passed to the Shopee actor's `country` field. Default 'ID'.
   // Tokopedia is Indonesia-only, so non-ID countries should not select Tokopedia.
   country?: string;
+  // Title-validation mode:
+  //   'strict' (default) — all 4 fields (brand+flavour+volume+type) must appear in the title
+  //   'loose'            — only brand+flavour required; volume+type are used in the SEARCH
+  //                        query but not enforced on the result. Use when 'strict' returns
+  //                        too few results — e.g. listings say 'Caramel Macchiato' but you
+  //                        typed it as 'caramel macchiato' (matches both ways) — except for
+  //                        spelling variants or word-order quirks Shopee won't normalize for us.
+  match_mode?: "strict" | "loose";
 
   // ── legacy fields (still readable for jobs queued before the redesign) ──
   search_mode?: "keyword" | "shop";

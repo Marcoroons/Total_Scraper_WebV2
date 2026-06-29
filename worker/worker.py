@@ -676,14 +676,19 @@ def _title_has_volume(title: str, vol_str: str) -> bool:
 
 
 def _title_matches_product(title: str, brand: str, flavour: str,
-                           volume: str = "", ptype: str = "") -> bool:
+                           volume: str = "", ptype: str = "",
+                           match_mode: str = "strict") -> bool:
     """Reject T-shirts and other-brand bleed at scrape time. Each user-supplied
     field is a strict filter — title must contain ALL of:
-      - brand tokens     (required field)
+      - brand tokens     (always required)
       - flavour tokens   (when flavour is set)
-      - volume           (when volume is set; whitespace-tolerant via regex)
-      - type tokens      (when type is set, e.g. 'kaleng' / 'kotak')
+      - volume           (when volume is set; STRICT mode only)
+      - type tokens      (when type is set, e.g. 'kaleng' / 'kotak'; STRICT mode only)
     Both sides are diacritic-normalized so 'Nestlé' titles match 'nestle' brand.
+    match_mode='strict' (default): enforce ALL fields.
+    match_mode='loose':           only brand+flavour required; volume+type are
+                                  used in the SEARCH query but not enforced on
+                                  the result. Higher recall, lower precision.
     """
     t = " " + _norm_text(title) + " "
     for tok in _tokens(brand):
@@ -692,6 +697,8 @@ def _title_matches_product(title: str, brand: str, flavour: str,
     for tok in _tokens(flavour):
         if tok not in t:
             return False
+    if match_mode == "loose":
+        return True
     if volume and not _title_has_volume(title, volume):
         return False
     for tok in _tokens(ptype):
@@ -727,6 +734,8 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     specific_shops = [str(s).strip() for s in (cfg.get("specific_shops") or []) if str(s).strip()]
     cap_per   = max(10, min(int(cfg.get("max_listings_per_product") or 50), 200))
     country   = (cfg.get("country") or "ID").upper()
+    match_mode = (cfg.get("match_mode") or "strict").lower()
+    if match_mode not in ("strict", "loose"): match_mode = "strict"
 
     # ── Build the product list, accepting both the new shape and the legacy ──
     products: list = []
@@ -769,6 +778,8 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
         raw_count = 0
         filtered_count = 0
         title_dropped = 0
+        # Per-product diagnostics — surface 'where did the rows go?' to the user.
+        per_product_stats: list = []
 
         for prod in products:
             brand   = prod["brand"]
@@ -778,13 +789,16 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             # Search query stitches together every supplied refinement. Empty
             # fields drop out cleanly thanks to the join + strip.
             query   = " ".join(s for s in (brand, flavour, volume, ptype) if s).strip()
+            product_label = (flavour or "(no flavour)") + (f" {volume}" if volume else "") + (f" {ptype}" if ptype else "")
             try:
                 items = runner(query, "keyword", cap_per, apify_token, country)
             except Exception as e:
                 print(f"      '{query}' FAILED: {str(e)[:200]}")
                 actor_errors += 1
+                per_product_stats.append({"label": product_label, "raw": 0, "matched": 0, "written": 0, "error": str(e)[:80]})
                 continue
-            raw_count += len(items or [])
+            prod_raw = len(items or [])
+            raw_count += prod_raw
 
             # Title-validate FIRST (cheapest filter) — drops T-shirts and other
             # brands' products before we even consider the official-store check.
@@ -792,10 +806,11 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             for it in (items or []):
                 if not isinstance(it, dict): continue
                 title = it.get("name") or it.get("itemName") or it.get("title") or ""
-                if not _title_matches_product(title, brand, flavour, volume, ptype):
+                if not _title_matches_product(title, brand, flavour, volume, ptype, match_mode):
                     title_dropped += 1
                     continue
                 valid.append(it)
+            prod_matched = len(valid)
 
             # Shop filtering moved to EXPORT time as of 2026-06-29. Scrape now
             # saves every title-validated row (with is_official_store tagged so
@@ -817,6 +832,7 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             # so attribution is by the user's intent. Volume / type are only
             # overlaid when the user supplied them — otherwise we leave the
             # mapper's null values for Phase 2 (regex) to fill in later.
+            prod_written = 0
             for it in filtered:
                 rs = mapper(it, pid, jid, brand)
                 for r in rs:
@@ -830,6 +846,8 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                     if key in seen_keys: continue
                     seen_keys.add(key)
                     platform_rows.append(r)
+                    prod_written += 1
+            per_product_stats.append({"label": product_label, "raw": prod_raw, "matched": prod_matched, "written": prod_written})
 
         if not platform_rows:
             if raw_count == 0:
@@ -861,10 +879,26 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                     n_official += 1
             top_shops = sorted(shop_counts.items(), key=lambda x: -x[1])[:3]
             shops_blurb = ", ".join(f"{s} ({n})" for s, n in top_shops)
+
+            # Per-product breakdown — answers 'why so few results?' at a glance.
+            # Format: 'latte: 10→1 (kept) | mocha: 10→4 | cappucino: 8→0 (title-mismatch)'
+            prod_bits: list = []
+            for s in per_product_stats:
+                if s.get("error"):
+                    prod_bits.append(f"{s['label']}: ERROR ({s['error']})")
+                elif s["raw"] == 0:
+                    prod_bits.append(f"{s['label']}: 0 returned")
+                elif s["matched"] == 0:
+                    prod_bits.append(f"{s['label']}: {s['raw']}→0 (title-mismatch)")
+                else:
+                    prod_bits.append(f"{s['label']}: {s['raw']}→{s['written']}")
+            prod_summary = " | ".join(prod_bits)
+
             print(f"      ✅ wrote {len(platform_rows)} rows ({raw_count} raw, {title_dropped} title-dropped)")
             notes.append(
-                f"{platform}: {len(platform_rows)} rows captured ({n_official} flagged Official) "
-                f"· {title_dropped} title-dropped · top shops: {shops_blurb}"
+                f"{platform} [{match_mode}]: {len(platform_rows)} rows captured "
+                f"({n_official} Official). Per-product: {prod_summary}. "
+                f"Top shops: {shops_blurb}."
             )
         except Exception as e:
             print(f"      ❌ upsert FAILED: {str(e)[:300]}")
