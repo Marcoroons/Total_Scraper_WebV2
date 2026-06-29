@@ -4,7 +4,7 @@ Restored: all Apify scraping, scheduled emails, recurring automations.
 Added: Multi-Layer Intelligence compiler (YouTube, Meta Ads, Trends, News).
 Added: Competitor Analysis Phase 1 — Shopee + Tokopedia listings ("Ecom Listings" job).
 """
-import os, time, re, requests, smtplib, base64, datetime, urllib.parse, json
+import os, time, re, requests, smtplib, base64, datetime, urllib.parse, json, unicodedata
 import feedparser
 from pytrends.request import TrendReq
 from email.message import EmailMessage
@@ -587,8 +587,12 @@ def _is_brand_official_shop(shop_name: str, brand: str) -> bool:
     gio21/shopee-scraper doesn't expose isMall/isOfficial as a boolean, and a
     bare 'official' substring lets random brands' Mall stores slip through
     (verified — Nescafe scrapes were pulling in Wings, Auzy, Maxfood etc.).
-    Require shopName to contain ALL brand tokens AND an 'official'/'mall' marker."""
-    sn = (shop_name or "").lower()
+    Require shopName to contain ALL brand tokens AND an 'official'/'mall' marker.
+    Diacritic-normalized so 'Nestlé Indonesia Official' matches a 'Nestle' brand input.
+    KNOWN GAP: many brands are sold by a PARENT-COMPANY official store rather
+    than a brand-named one (Nescafe → Nestlé Indonesia, Top Coffee → Wings).
+    For those, the user should switch to 'Specific shop(s)' mode."""
+    sn = _norm_text(shop_name)
     if not sn:
         return False
     if "official" not in sn and "mall" not in sn:
@@ -617,22 +621,40 @@ def _apply_official_filter(items: list, mode: str, platform: str, brand: str,
         return [it for it in items if _is_brand_official_shop(_shop_name_of(it), brand)]
     if mode == "non_official_only":
         def _any_official(it):
-            sn = _shop_name_of(it).lower()
+            sn = _norm_text(_shop_name_of(it))
             return "official" in sn or "mall" in sn
         return [it for it in items if not _any_official(it)]
     if mode == "specific_shops":
-        wanted = [s.strip().lower() for s in (specific_shops or []) if s and s.strip()]
-        if not wanted:
+        # Token-based match: each user-supplied shop name's tokens (diacritic-
+        # normalized) must ALL appear in the listing's normalized shopName.
+        # Multiple shop entries are OR'd. So 'nestle indonesia' matches
+        # 'Nestlé Indonesia Official Store', and listing 'Wings Official' also
+        # matches if the user supplied 'wings official' as a separate entry.
+        wanted_groups: list = []
+        for s in (specific_shops or []):
+            toks = _tokens(s)
+            if toks:
+                wanted_groups.append(toks)
+        if not wanted_groups:
             return []   # user picked 'specific_shops' but listed none — reject all
         def _shop_match(it):
-            sn = _shop_name_of(it).lower()
-            return any(w in sn for w in wanted)
+            sn_norm = _norm_text(_shop_name_of(it))
+            return any(all(t in sn_norm for t in group) for group in wanted_groups)
         return [it for it in items if _shop_match(it)]
     return items
 
+def _norm_text(s: str) -> str:
+    """Lowercase + strip combining diacritics so 'Nestlé' becomes 'nestle'.
+    Without this, the user typing 'nestle indonesia' never matches the actual
+    Shopee Mall store called 'Nestlé Indonesia Official Store'."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c)
+    ).lower()
+
 def _tokens(s: str) -> list:
-    """Lowercase alphanumeric token split — 'Caramel Macchiato' → ['caramel','macchiato']."""
-    return [t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if t]
+    """Diacritic-normalized lowercase alphanumeric token split —
+    'Nestlé Indonesia' → ['nestle','indonesia']."""
+    return [t for t in re.findall(r"[a-z0-9]+", _norm_text(s)) if t]
 
 
 def _title_has_volume(title: str, vol_str: str) -> bool:
@@ -658,8 +680,9 @@ def _title_matches_product(title: str, brand: str, flavour: str,
       - flavour tokens   (when flavour is set)
       - volume           (when volume is set; whitespace-tolerant via regex)
       - type tokens      (when type is set, e.g. 'kaleng' / 'kotak')
+    Both sides are diacritic-normalized so 'Nestlé' titles match 'nestle' brand.
     """
-    t = " " + (title or "").lower() + " "
+    t = " " + _norm_text(title) + " "
     for tok in _tokens(brand):
         if tok not in t:
             return False

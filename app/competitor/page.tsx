@@ -550,14 +550,57 @@ export default function CompetitorAnalysisPage() {
                 type="text"
                 value={specificShops}
                 onChange={(e) => setSpecificShops(e.target.value)}
-                placeholder="e.g. Nescafe Official Store, Tokopedia Nescafe, Indomie Official"
+                placeholder="e.g. Nestlé Indonesia, Wings Official, Indomaret Official"
                 className={`w-full ${inputCls}`}
               />
               <p className="text-[11px] text-muted-foreground mt-1">
-                Comma-separated. Case-insensitive substring match against each listing's shop name.
+                Comma-separated. Case-insensitive AND accent-insensitive — <code>nestle</code> matches <code>Nestlé</code>.
+                For each entry, ALL its tokens must appear in the listing's shop name. Multiple entries are OR&apos;d.
               </p>
             </div>
           )}
+
+          {/* Tips — when to pick which mode + the parent-brand gotcha */}
+          <details className="rounded-lg border border-border" style={{ background: "var(--input)" }}>
+            <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground select-none">
+              Tips · when and why to use each shop filter
+            </summary>
+            <div className="px-4 pb-3 pt-1 space-y-2 text-[12px] text-muted-foreground leading-relaxed">
+              <p>
+                <span className="text-foreground font-medium">All sellers</span> — broadest sample;
+                best when you want a market-wide median price across resellers too. Use this if
+                <code>Official store only</code> returns 0 (then switch back once you find the right shop name).
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Official store only</span> — cleanest signal,
+                the brand's own pricing/availability. Shop name must contain the brand + <em>Official</em> / <em>Mall</em>.
+                <span className="text-yellow-400/90"> Watch out:</span> many brands are sold by a
+                <em> parent-company</em> store, not a brand-named one — e.g. <strong>Nescafe</strong> is sold by
+                <em> Nestlé Indonesia Official Store</em>, not "Nescafe Official Store". When this mode returns
+                0, switch to <strong>Specific shop(s)</strong> below and type the parent-company name.
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Non-official only</span> — excludes any Mall /
+                Official shop. Useful for spotting <em>reseller / grey-market</em> pricing for arbitrage signals
+                or seeing how much markup retailers add on top of the brand's MSRP.
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Specific shop(s)</span> — paste the exact shop
+                names you want to track. Examples for Indonesian FMCG:
+              </p>
+              <ul className="list-disc list-inside pl-3 space-y-0.5">
+                <li><code>Nestlé Indonesia</code> — for Nescafe, KitKat, Milo, Bear Brand, Dancow</li>
+                <li><code>Wings Official</code> — for Top Coffee, Neo Coffee, Mie Sedaap, Floridina</li>
+                <li><code>Indofood</code> — for Indomie, Pop Mie, Indomilk, Pop Ice</li>
+                <li><code>Mayora</code> — for Kopiko, Beng-Beng, Le Minerale, Roma</li>
+                <li><code>OATSIDE Official</code>, <code>Cimory Official</code> — single-brand companies use brand-name stores directly</li>
+              </ul>
+              <p>
+                Diacritics and capitalization are normalized automatically — typing <code>nestle indonesia</code> matches
+                <code> Nestlé Indonesia Official Store</code>.
+              </p>
+            </div>
+          </details>
         </div>
 
         {/* Max per product + Apify */}
