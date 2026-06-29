@@ -133,6 +133,10 @@ class EcomRequest(BaseModel):
     brand_filter: str | None = None      # case-insensitive ilike match; None = all brands
     platform_filter: str | None = None   # "Shopee" | "Tokopedia" | None for all
     job_id: str | None = None            # filter to a single scrape job's listings; None = all jobs
+    # Shop filter applies at export time (decoupled from scrape).
+    # 'all' | 'official_only' | 'non_official_only' | 'specific_shops'
+    shop_filter: str | None = "all"
+    specific_shops: list[str] | None = None   # used when shop_filter == 'specific_shops'
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -226,6 +230,11 @@ def export_ecom(req: EcomRequest):
                 "Run an Ecom Listings scrape from the Competitor Analysis page first."
             ),
         )
-    buf = build_ecom_workbook(rows, brand_filter=req.brand_filter)
+    buf = build_ecom_workbook(
+        rows,
+        brand_filter=req.brand_filter,
+        shop_filter=req.shop_filter or "all",
+        specific_shops=req.specific_shops,
+    )
     brand_slug = (req.brand_filter or "all").lower().replace(" ", "_")
     return _xlsx_response(buf, f"competitor_analysis_{brand_slug}.xlsx")

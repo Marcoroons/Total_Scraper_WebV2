@@ -30,12 +30,53 @@ from __future__ import annotations
 import io
 import re
 import statistics as stats
+import unicodedata
 from collections import defaultdict
 from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+
+def _norm_text(s: str) -> str:
+    """Lowercase + strip diacritics. 'Nestlé' → 'nestle'. Matches the worker's
+    normalization so shop-name matches behave identically on both sides."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c)
+    ).lower()
+
+
+def _shop_tokens(s: str) -> list:
+    """Token split after normalization — used for the specific_shops match."""
+    return [t for t in re.findall(r"[a-z0-9]+", _norm_text(s)) if t]
+
+
+def _apply_export_shop_filter(rows: list[dict], shop_filter: str | None,
+                              specific_shops: list[str] | None) -> list[dict]:
+    """Filter the listings list by the export-time shop filter.
+    Matches the worker's filter semantics (see _shop_is_official /
+    _apply_official_filter in worker.py)."""
+    mode = (shop_filter or "all").lower()
+    if mode == "all" or not mode:
+        return rows
+    if mode == "official_only":
+        return [r for r in rows if r.get("is_official_store")]
+    if mode == "non_official_only":
+        return [r for r in rows if not r.get("is_official_store")]
+    if mode == "specific_shops":
+        groups = []
+        for s in (specific_shops or []):
+            toks = _shop_tokens(s)
+            if toks:
+                groups.append(toks)
+        if not groups:
+            return []
+        return [
+            r for r in rows
+            if any(all(t in _norm_text(r.get("shop_name") or "") for t in g) for g in groups)
+        ]
+    return rows
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -555,8 +596,15 @@ def _notes_sheet(wb: Workbook, n_listings: int, brand_filter: str | None) -> Non
     ws.column_dimensions["A"].width = 110
 
 
-def build_ecom_workbook(rows: list[dict], brand_filter: str | None = None) -> io.BytesIO:
-    """Top-level entry: parse + aggregate-per-product + emit xlsx bytes."""
+def build_ecom_workbook(
+    rows: list[dict],
+    brand_filter: str | None = None,
+    shop_filter: str | None = "all",
+    specific_shops: list[str] | None = None,
+) -> io.BytesIO:
+    """Top-level entry: filter by shop → parse → aggregate-per-product → emit xlsx.
+    shop_filter ∈ {all, official_only, non_official_only, specific_shops}."""
+    rows          = _apply_export_shop_filter(rows, shop_filter, specific_shops)
     parsed        = [parse_listing(r) for r in rows]
     product_rows  = aggregate_by_product(parsed)
 

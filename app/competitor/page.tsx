@@ -75,6 +75,8 @@ export default function CompetitorAnalysisPage() {
   const [exportBrand,    setExportBrand]    = useState<string>("");   // "" = all brands
   const [exportPlatform, setExportPlatform] = useState<string>("");   // "" = all platforms
   const [exportLatestOnly, setExportLatestOnly] = useState<boolean>(true);   // default ON — avoids legacy contamination
+  const [exportShopMode, setExportShopMode] = useState<EcomJobConfig["official_store_filter"]>("all");
+  const [exportSpecificShops, setExportSpecificShops] = useState<string>("");
   const [exporting,      setExporting]      = useState(false);
   const [exportMsg,      setExportMsg]      = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -154,11 +156,8 @@ export default function CompetitorAnalysisPage() {
       errs.push("Add at least one product — fill in a brand (flavour is optional).");
     if (maxPerProduct < 10 || maxPerProduct > 200)
       errs.push("Max listings per product must be between 10 and 200.");
-    if (officialMode === "specific_shops" &&
-        specificShops.split(",").map((s) => s.trim()).filter(Boolean).length === 0)
-      errs.push("Add at least one shop name when 'Specific shop(s)' is selected.");
     return errs;
-  }, [activeProjectId, platforms, cleanProducts, maxPerProduct, officialMode, specificShops]);
+  }, [activeProjectId, platforms, cleanProducts, maxPerProduct]);
 
   async function queueJob() {
     if (validationErrors.length || !activeProjectId) return;
@@ -304,6 +303,7 @@ export default function CompetitorAnalysisPage() {
       const latestJobId = exportLatestOnly
         ? (ecomJobs.find((j) => j.status === "COMPLETED")?.job_id ?? null)
         : null;
+      const exportShopList = exportSpecificShops.split(",").map((s) => s.trim()).filter(Boolean);
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -313,6 +313,8 @@ export default function CompetitorAnalysisPage() {
           brand_filter:    exportBrand    || null,
           platform_filter: exportPlatform || null,
           job_id:          latestJobId,
+          shop_filter:     exportShopMode,
+          specific_shops:  exportShopMode === "specific_shops" ? exportShopList : null,
         }),
       });
       if (!res.ok) {
@@ -519,89 +521,16 @@ export default function CompetitorAnalysisPage() {
           </div>
         </div>
 
-        {/* Shop filter */}
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">Shop filter</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-            {OFFICIAL_FILTERS.map((f) => {
-              const active = officialMode === f.value;
-              return (
-                <button
-                  key={f.value}
-                  type="button"
-                  onClick={() => setOfficialMode(f.value)}
-                  className="text-left px-3 py-2 rounded-xl border transition-colors"
-                  style={{
-                    background: active ? `${ACCENT}1a` : "transparent",
-                    borderColor: active ? `${ACCENT}88` : "var(--border)",
-                  }}
-                >
-                  <div className="text-sm font-medium" style={{ color: active ? ACCENT : "var(--foreground)" }}>
-                    {f.label}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5">{f.hint}</div>
-                </button>
-              );
-            })}
-          </div>
-          {officialMode === "specific_shops" && (
-            <div className="pt-1">
-              <input
-                type="text"
-                value={specificShops}
-                onChange={(e) => setSpecificShops(e.target.value)}
-                placeholder="e.g. Nestlé Indonesia, Wings Official, Indomaret Official"
-                className={`w-full ${inputCls}`}
-              />
-              <p className="text-[11px] text-muted-foreground mt-1">
-                Comma-separated. Case-insensitive AND accent-insensitive — <code>nestle</code> matches <code>Nestlé</code>.
-                For each entry, ALL its tokens must appear in the listing's shop name. Multiple entries are OR&apos;d.
-              </p>
-            </div>
-          )}
-
-          {/* Tips — when to pick which mode + the parent-brand gotcha */}
-          <details className="rounded-lg border border-border" style={{ background: "var(--input)" }}>
-            <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground select-none">
-              Tips · when and why to use each shop filter
-            </summary>
-            <div className="px-4 pb-3 pt-1 space-y-2 text-[12px] text-muted-foreground leading-relaxed">
-              <p>
-                <span className="text-foreground font-medium">All sellers</span> — broadest sample;
-                best when you want a market-wide median price across resellers too. Use this if
-                <code>Official store only</code> returns 0 (then switch back once you find the right shop name).
-              </p>
-              <p>
-                <span className="text-foreground font-medium">Official store only</span> — keeps any shop whose
-                name reads as <em>Official</em> or <em>Mall</em>. Works automatically for
-                <strong> parent-brand stores</strong> like <em>Nestlé Indonesia Official Store</em> (which
-                sells Nescafe / KitKat / Milo) — the title-validation upstream already enforces brand
-                purity, so the shop check stays simple. This is the right default for clean brand
-                benchmarking.
-              </p>
-              <p>
-                <span className="text-foreground font-medium">Non-official only</span> — excludes any Mall /
-                Official shop. Useful for spotting <em>reseller / grey-market</em> pricing for arbitrage signals
-                or seeing how much markup retailers add on top of the brand's MSRP.
-              </p>
-              <p>
-                <span className="text-foreground font-medium">Specific shop(s)</span> — use when you want to
-                target ONE seller exactly (e.g. tracking a single competitor's prices over time). Examples:
-              </p>
-              <ul className="list-disc list-inside pl-3 space-y-0.5">
-                <li><code>Nestlé Indonesia</code> — sells Nescafe, KitKat, Milo, Bear Brand, Dancow</li>
-                <li><code>Wings Official</code> — sells Top Coffee, Neo Coffee, Mie Sedaap, Floridina</li>
-                <li><code>Indofood</code> — sells Indomie, Pop Mie, Indomilk, Pop Ice</li>
-                <li><code>Mayora</code> — sells Kopiko, Beng-Beng, Le Minerale, Roma</li>
-                <li><code>OATSIDE Official</code>, <code>Cimory Official</code> — single-brand companies use brand-name stores directly</li>
-              </ul>
-              <p>
-                Diacritics and capitalization are normalized automatically — typing <code>nestle indonesia</code> matches
-                <code> Nestlé Indonesia Official Store</code>. Each entry's tokens must ALL appear in the shop name;
-                multiple entries (comma-separated) are OR&apos;d.
-              </p>
-            </div>
-          </details>
+        {/* Shop filter moved to the Export panel (2026-06-29) — scrape captures
+            every title-validated row, you filter by shop at export time without
+            re-scraping. Kept officialMode + specificShops state only as
+            defaults piped through into the Export panel below. */}
+        <div className="rounded-lg border border-border p-3 text-[12px] text-muted-foreground" style={{ background: "var(--input)" }}>
+          <strong className="text-foreground">Shop filter moved to the Export panel.</strong>{" "}
+          Scraping now captures every listing whose title matches your brand + flavour + volume + type — including
+          resellers and parent-brand stores. Choose your shop lens (Official only / Specific shop / etc.) when you
+          export. This means one scrape, many filtered views — and you see in the Captured Listings preview exactly
+          who's selling what before you commit to a filter.
         </div>
 
         {/* Max per product + Apify */}
@@ -727,6 +656,80 @@ export default function CompetitorAnalysisPage() {
             <span className="text-muted-foreground"> — uncheck to include every captured listing across all scrapes</span>
           </span>
         </label>
+
+        {/* Shop filter — applied at export, not at scrape. Flip freely without re-scraping. */}
+        <div className="space-y-2 pt-2">
+          <p className="text-[11px] text-muted-foreground">Shop filter</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {OFFICIAL_FILTERS.map((f) => {
+              const active = exportShopMode === f.value;
+              return (
+                <button
+                  key={f.value}
+                  type="button"
+                  onClick={() => setExportShopMode(f.value)}
+                  className="text-left px-3 py-2 rounded-xl border transition-colors"
+                  style={{
+                    background: active ? `${ACCENT}1a` : "transparent",
+                    borderColor: active ? `${ACCENT}88` : "var(--border)",
+                  }}
+                >
+                  <div className="text-sm font-medium" style={{ color: active ? ACCENT : "var(--foreground)" }}>
+                    {f.label}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">{f.hint}</div>
+                </button>
+              );
+            })}
+          </div>
+          {exportShopMode === "specific_shops" && (
+            <input
+              type="text"
+              value={exportSpecificShops}
+              onChange={(e) => setExportSpecificShops(e.target.value)}
+              placeholder="e.g. Nestlé Indonesia, Wings Official, Indomaret Official"
+              className={`w-full ${inputCls}`}
+            />
+          )}
+
+          {/* Tips — when to pick which mode + parent-brand reminder */}
+          <details className="rounded-lg border border-border" style={{ background: "var(--input)" }}>
+            <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground select-none">
+              Tips · when and why to use each shop filter
+            </summary>
+            <div className="px-4 pb-3 pt-1 space-y-2 text-[12px] text-muted-foreground leading-relaxed">
+              <p>
+                <span className="text-foreground font-medium">All sellers</span> — every captured listing.
+                Best for market-wide median pricing including resellers. <strong>Default — change after seeing the Captured Listings preview.</strong>
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Official store only</span> — shops whose name reads
+                as <em>Official</em> / <em>Mall</em>. Works automatically for parent-brand stores like
+                <em> Nestlé Indonesia Official Store</em> (which sells Nescafe / KitKat / Milo) — title-validation
+                upstream already enforced brand purity, so this is just &quot;is the seller a Mall shop?&quot;.
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Non-official only</span> — excludes Mall / Official
+                shops. Useful for spotting reseller / grey-market pricing or markup over MSRP.
+              </p>
+              <p>
+                <span className="text-foreground font-medium">Specific shop(s)</span> — comma-separated list, case- AND accent-insensitive.
+                Examples for Indonesian FMCG:
+              </p>
+              <ul className="list-disc list-inside pl-3 space-y-0.5">
+                <li><code>Nestlé Indonesia</code> — Nescafe, KitKat, Milo, Bear Brand, Dancow</li>
+                <li><code>Wings Official</code> — Top Coffee, Neo Coffee, Mie Sedaap, Floridina</li>
+                <li><code>Indofood</code> — Indomie, Pop Mie, Indomilk, Pop Ice</li>
+                <li><code>Mayora</code> — Kopiko, Beng-Beng, Le Minerale, Roma</li>
+                <li><code>OATSIDE Official</code>, <code>Cimory Official</code> — single-brand companies</li>
+              </ul>
+              <p>
+                Typing <code>nestle indonesia</code> matches <code>Nestlé Indonesia Official Store</code>.
+                Each entry&apos;s tokens must ALL appear in the shop name; entries are OR&apos;d.
+              </p>
+            </div>
+          </details>
+        </div>
 
         {exportMsg && (
           <div

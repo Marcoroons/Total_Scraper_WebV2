@@ -797,9 +797,15 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                     continue
                 valid.append(it)
 
-            # Then apply the user's shop filter on the survivors. official_only
-            # is brand-strict; specific_shops matches the user's shopName list.
-            filtered = _apply_official_filter(valid, of_filter, platform, brand, specific_shops)
+            # Shop filtering moved to EXPORT time as of 2026-06-29. Scrape now
+            # saves every title-validated row (with is_official_store tagged so
+            # the exporter / preview can filter or color-code). Reasons:
+            #   - User loses no Apify cost by capturing more (one call returns
+            #     a fixed batch regardless).
+            #   - Visibility — user sees every seller in Captured Listings and
+            #     can decide which to include in the export without re-running.
+            #   - Reversibility — change the export filter, re-export instantly.
+            filtered = valid
             filtered_count += len(filtered)
 
             # Pre-compute user-spec overlays so the per-row work is cheap.
@@ -832,11 +838,6 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             elif title_dropped == raw_count:
                 reason = (f"{platform}: actor returned {raw_count} item(s) but ALL failed the "
                           f"title-validation (brand or flavour tokens not in title)")
-            elif of_filter != "all" and filtered_count == 0:
-                hint = ("try 'all' or check the shop name(s)" if of_filter == "specific_shops"
-                        else "try 'all' to keep them")
-                reason = (f"{platform}: {raw_count - title_dropped} valid item(s) but all rejected "
-                          f"by official_store_filter='{of_filter}' — {hint}")
             else:
                 reason = f"{platform}: {raw_count} returned, mapper produced 0 rows (see Railway logs)"
             notes.append(reason)
@@ -848,8 +849,23 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                 platform_rows, on_conflict="project_id,product_id,variation_id,platform"
             ).execute()
             total_written += len(platform_rows)
+            # Per-shop visibility — surface the top sellers in the job's
+            # error_message so the user sees who's behind the data without
+            # opening Supabase or the preview panel.
+            shop_counts: dict = {}
+            n_official = 0
+            for r in platform_rows:
+                sn = (r.get("shop_name") or "(unknown shop)")
+                shop_counts[sn] = shop_counts.get(sn, 0) + 1
+                if r.get("is_official_store"):
+                    n_official += 1
+            top_shops = sorted(shop_counts.items(), key=lambda x: -x[1])[:3]
+            shops_blurb = ", ".join(f"{s} ({n})" for s, n in top_shops)
             print(f"      ✅ wrote {len(platform_rows)} rows ({raw_count} raw, {title_dropped} title-dropped)")
-            notes.append(f"{platform}: {len(platform_rows)} rows from {len(products)} product(s) ({title_dropped} title-mismatches dropped)")
+            notes.append(
+                f"{platform}: {len(platform_rows)} rows captured ({n_official} flagged Official) "
+                f"· {title_dropped} title-dropped · top shops: {shops_blurb}"
+            )
         except Exception as e:
             print(f"      ❌ upsert FAILED: {str(e)[:300]}")
             raise
