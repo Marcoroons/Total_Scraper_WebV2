@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Hash, RefreshCw } from "lucide-react";
+import { Download, Hash, RefreshCw, X } from "lucide-react";
 import { CatSpinner } from "@/components/CatSpinner";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs } from "@/lib/hooks/useJobs";
@@ -43,6 +43,7 @@ export default function HashtagsPage() {
   const [okMsg,    setOkMsg]    = useState<string | null>(null);
   const [rows,     setRows]     = useState<TrendRow[]>([]);
   const [loading,  setLoading]  = useState(false);
+  const [deletingTag, setDeletingTag] = useState<string | null>(null);
 
   const loadResults = useCallback(async () => {
     if (!activeProjectId) { setRows([]); return; }
@@ -56,6 +57,44 @@ export default function HashtagsPage() {
   }, [activeProjectId]);
 
   useEffect(() => { loadResults(); }, [loadResults]);
+
+  // Distinct hashtags present in this project's scraped data (per platform),
+  // each with a count for quick "how many posts did this hashtag bring back?"
+  const scrapedHashtags = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const r of rows) {
+      if (r.platform !== platform) continue;
+      for (const t of (r.search_target || "").split(",")) {
+        const tag = t.replace(/#/g, "").trim();
+        if (tag) counts[tag] = (counts[tag] || 0) + 1;
+      }
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [rows, platform]);
+
+  async function deleteHashtag(tag: string) {
+    if (!activeProjectId || !tag) return;
+    if (!confirm(
+      `Delete every scraped post tagged "#${tag}" on ${platform}? ` +
+      `Jobs in the Queue stay; only the captured trend_discovery rows are wiped. ` +
+      `KOL Finder will also lose this data.`
+    )) return;
+    setDeletingTag(tag);
+    setErrors([]);
+    try {
+      const params = new URLSearchParams({ project_id: activeProjectId, hashtag: tag, platform });
+      const res = await fetch(`/api/trends?${params}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+      const n = (data as { deleted?: number }).deleted ?? 0;
+      setOkMsg(`Deleted ${n} post(s) tagged #${tag} on ${platform}.`);
+      await loadResults();
+    } catch (e) {
+      setErrors([e instanceof Error ? e.message : "Failed to delete hashtag data."]);
+    } finally {
+      setDeletingTag(null);
+    }
+  }
 
   // ── Video-optimisation analysis (client-side, from the scraped rows) ──
   const analysis = useMemo(() => {
@@ -199,6 +238,34 @@ export default function HashtagsPage() {
 
         {/* ── Results: tabbed ── */}
         <div>
+          {/* Scraped hashtags chip list — click X to delete that hashtag's
+              captured posts from trend_discovery (also affects KOL Finder). */}
+          {scrapedHashtags.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mr-1">
+                Scraped on {platform}
+              </span>
+              {scrapedHashtags.map(([tag, n]) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs border"
+                  style={{ borderColor: `${ACCENT}55`, background: `${ACCENT}1a`, color: ACCENT }}
+                >
+                  #{tag} <span className="opacity-60">·{n}</span>
+                  <button
+                    type="button"
+                    onClick={() => deleteHashtag(tag)}
+                    disabled={deletingTag === tag}
+                    title={`Delete every scraped post tagged #${tag} on ${platform}`}
+                    className="hover:text-red-400 disabled:opacity-30 transition-colors"
+                  >
+                    {deletingTag === tag ? <CatSpinner size={10} /> : <X className="w-3 h-3" />}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-4">
             <div className="flex gap-0 border-b border-border">
               {([{ id: "trends", label: "Trend Discovery" }, { id: "optimise", label: "Video Optimisation" }] as { id: Tab; label: string }[]).map((t) => (

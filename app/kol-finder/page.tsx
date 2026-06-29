@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, RefreshCw, Star, ExternalLink, UserSearch, Database } from "lucide-react";
+import { Download, RefreshCw, Star, ExternalLink, UserSearch, Database, Trash2 } from "lucide-react";
 import { CatSpinner } from "@/components/CatSpinner";
 import { useProject } from "@/lib/context/ProjectContext";
 import { useJobs } from "@/lib/hooks/useJobs";
@@ -89,6 +89,35 @@ export default function KolFinderPage() {
   const [hideBusiness, setHideBusiness] = useState(true);
   const [customExclude, setCustomExclude] = useState("");
   const [dateWindowDays, setDateWindowDays] = useState(0);
+
+  const [deletingTag, setDeletingTag] = useState<string | null>(null);
+
+  const deleteHashtag = useCallback(async (tag: string) => {
+    if (!activeProjectId || !tag) return;
+    if (!confirm(
+      `Delete every scraped post tagged "#${tag}" on ${platform}? ` +
+      `Jobs in the Queue stay; only the captured trend_discovery rows are wiped. ` +
+      `KOL Finder, the Hashtag/Trends page, and any creators only seen via this hashtag will lose data.`
+    )) return;
+    setDeletingTag(tag);
+    try {
+      const params = new URLSearchParams({ project_id: activeProjectId, hashtag: tag, platform });
+      const res = await fetch(`/api/trends?${params}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+      const n = (data as { deleted?: number }).deleted ?? 0;
+      setOkMsg(`Deleted ${n} post(s) tagged #${tag} on ${platform}.`);
+      // Reset filter if we just nuked the selected hashtag, then reload.
+      setHashtagFilter("");
+      await loadResults();
+    } catch (e) {
+      setErrors([e instanceof Error ? e.message : "Failed to delete hashtag data."]);
+    } finally {
+      setDeletingTag(null);
+    }
+  // loadResults is defined just below — referenced via closure, safe.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId, platform]);
 
   const loadResults = useCallback(async () => {
     if (!activeProjectId) { setRows([]); return; }
@@ -390,6 +419,17 @@ export default function KolFinderPage() {
                   <option value="">All hashtags{availableHashtags.length ? ` (${availableHashtags.length})` : ""}</option>
                   {availableHashtags.map((h) => <option key={h} value={h}>#{h}</option>)}
                 </select>
+                {hashtagFilter && (
+                  <button
+                    type="button"
+                    onClick={() => deleteHashtag(hashtagFilter)}
+                    disabled={deletingTag === hashtagFilter}
+                    title={`Delete every scraped post tagged #${hashtagFilter} on ${platform}`}
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md border border-border text-muted-foreground hover:text-red-400 hover:border-red-400/40 disabled:opacity-30 transition-colors"
+                  >
+                    {deletingTag === hashtagFilter ? <CatSpinner size={12} /> : <Trash2 className="w-3.5 h-3.5" />}
+                  </button>
+                )}
                 <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Rank by</span>
                 <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
                   className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
