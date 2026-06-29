@@ -660,6 +660,49 @@ def _tokens(s: str) -> list:
     return [t for t in re.findall(r"[a-z0-9]+", _norm_text(s)) if t]
 
 
+# Indonesian ↔ English equivalents that show up on Shopee titles. When a user
+# types `kaleng` we should accept listings that say "Canned" too. Each group
+# is a set of interchangeable tokens — matching any one satisfies the search.
+# Lowercase, diacritic-stripped. Extend as you encounter more synonym pairs.
+_SYNONYM_GROUPS = [
+    # Container / packaging
+    {"kaleng", "can", "canned", "tin"},
+    {"kotak", "box", "carton", "karton", "dus"},
+    {"botol", "bottle"},
+    {"sachet", "saset"},
+    {"renceng", "string", "strip"},
+    {"pouch", "pack", "bag", "bungkus"},
+    # Flavours / common product terms
+    {"coklat", "cokelat", "chocolate", "choco"},
+    {"stroberi", "strawberry"},
+    {"vanila", "vanilla", "vanille"},
+    {"pisang", "banana"},
+    {"kopi", "coffee"},
+    {"susu", "milk"},
+    {"jeruk", "orange"},
+    {"mangga", "mango"},
+    {"nanas", "pineapple"},
+    {"ayam", "chicken"},
+    {"daging", "beef", "meat"},
+    {"pedas", "spicy", "hot"},
+    {"goreng", "fried"},
+    {"manis", "sweet"},
+    {"asam", "sour"},
+]
+# Reverse index: token -> the set it belongs to (or None if no synonyms).
+_TOK_TO_GROUP = {tok: grp for grp in _SYNONYM_GROUPS for tok in grp}
+
+
+def _token_matches_title(tok: str, title_norm: str) -> bool:
+    """Token satisfied if the normalized title contains the token OR any
+    synonym from the same group. Substring match — 'choco' will match
+    'chocolaty' too, which is acceptable for FMCG titles."""
+    grp = _TOK_TO_GROUP.get(tok)
+    if grp:
+        return any(s in title_norm for s in grp)
+    return tok in title_norm
+
+
 def _title_has_volume(title: str, vol_str: str) -> bool:
     """Tolerant volume match — '240ml' user input matches '240ml', '240 ml',
     '240 ML' in the title. If the user input doesn't parse as number+UOM,
@@ -681,28 +724,34 @@ def _title_matches_product(title: str, brand: str, flavour: str,
     """Reject T-shirts and other-brand bleed at scrape time. Each user-supplied
     field is a strict filter — title must contain ALL of:
       - brand tokens     (always required)
-      - flavour tokens   (when flavour is set)
+      - flavour tokens   (when flavour is set; synonyms accepted)
       - volume           (when volume is set; STRICT mode only)
-      - type tokens      (when type is set, e.g. 'kaleng' / 'kotak'; STRICT mode only)
+      - type tokens      (when type is set, synonyms accepted in STRICT mode)
     Both sides are diacritic-normalized so 'Nestlé' titles match 'nestle' brand.
+    Synonym groups recognised: kaleng↔can↔canned, kotak↔box↔carton, botol↔bottle,
+    coklat↔chocolate, susu↔milk, kopi↔coffee, ayam↔chicken, etc. — see
+    _SYNONYM_GROUPS above.
     match_mode='strict' (default): enforce ALL fields.
     match_mode='loose':           only brand+flavour required; volume+type are
                                   used in the SEARCH query but not enforced on
                                   the result. Higher recall, lower precision.
     """
     t = " " + _norm_text(title) + " "
+    # Brand: typically a proper noun — no synonym fallback (Nescafé != Nestle).
     for tok in _tokens(brand):
         if tok not in t:
             return False
+    # Flavour: synonym-aware (coklat ↔ chocolate, susu ↔ milk, etc.).
     for tok in _tokens(flavour):
-        if tok not in t:
+        if not _token_matches_title(tok, t):
             return False
     if match_mode == "loose":
         return True
     if volume and not _title_has_volume(title, volume):
         return False
+    # Container type: synonym-aware (kaleng ↔ can ↔ canned, kotak ↔ box).
     for tok in _tokens(ptype):
-        if tok not in t:
+        if not _token_matches_title(tok, t):
             return False
     return True
 

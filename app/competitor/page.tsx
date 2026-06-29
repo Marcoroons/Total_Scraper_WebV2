@@ -519,7 +519,13 @@ export default function CompetitorAnalysisPage() {
             </button>
             <p className="text-[11px] text-muted-foreground">
               Volume tolerates whitespace — <code>240ml</code> matches both <code>240ml</code> and <code>240 ml</code> in titles.
-              Type accepts Bahasa terms like <code>kaleng</code> / <code>kotak</code> / <code>botol</code> / <code>pouch</code>.
+              Type and flavour are <strong>synonym-aware</strong>:{" "}
+              <code>kaleng</code> ↔ <code>can</code> ↔ <code>canned</code>,{" "}
+              <code>kotak</code> ↔ <code>box</code> ↔ <code>carton</code>,{" "}
+              <code>botol</code> ↔ <code>bottle</code>,{" "}
+              <code>coklat</code> ↔ <code>chocolate</code>,{" "}
+              <code>susu</code> ↔ <code>milk</code>,{" "}
+              <code>kopi</code> ↔ <code>coffee</code>, etc. Accents are stripped — <code>nescafe</code> matches <code>Nescafé</code>.
             </p>
           </div>
         </div>
