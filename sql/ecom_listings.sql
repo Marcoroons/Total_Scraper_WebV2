@@ -81,4 +81,20 @@ CREATE INDEX IF NOT EXISTS ecom_listings_review_idx
 ALTER TABLE public.scrape_jobs
     ADD COLUMN IF NOT EXISTS ecom_config jsonb;
 
+-- ----------------------------------------------------------------------------
+-- Realtime — let the Competitor Analysis page subscribe to INSERTs on
+-- ecom_listings so new scraped rows appear in the "Captured Listings"
+-- preview without a manual refresh. Idempotent.
+-- ----------------------------------------------------------------------------
+DO $$
+BEGIN
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.ecom_listings;
+    EXCEPTION
+        WHEN duplicate_object THEN NULL;   -- already in the publication
+        WHEN undefined_object THEN
+            RAISE NOTICE 'supabase_realtime publication not found — skipping (running outside a Supabase project?)';
+    END;
+END $$;
+
 NOTIFY pgrst, 'reload schema';

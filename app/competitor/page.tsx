@@ -15,6 +15,20 @@ const ACCENT = "#fb923c";
 const PLATFORMS = ["Shopee", "Tokopedia"] as const;
 type PlatformName = (typeof PLATFORMS)[number];
 
+// Shopee operates in these markets — the actor takes the ISO-2 in its
+// 'country' field. Tokopedia is Indonesia-only.
+const COUNTRIES: { code: string; label: string }[] = [
+  { code: "ID", label: "Indonesia" },
+  { code: "MY", label: "Malaysia" },
+  { code: "SG", label: "Singapore" },
+  { code: "TH", label: "Thailand" },
+  { code: "VN", label: "Vietnam" },
+  { code: "PH", label: "Philippines" },
+  { code: "TW", label: "Taiwan" },
+  { code: "BR", label: "Brazil" },
+  { code: "MX", label: "Mexico" },
+];
+
 const OFFICIAL_FILTERS: { value: EcomJobConfig["official_store_filter"]; label: string; hint: string }[] = [
   { value: "all",                 label: "All sellers",        hint: "Include every seller surfaced by the search." },
   { value: "official_only",       label: "Official store only", hint: "Shop name must include the BRAND + 'Official' or 'Mall'. Filters out other brands' Mall stores." },
@@ -36,10 +50,11 @@ const STATUS_PILL: Record<Job["status"], { bg: string; border: string; color: st
 
 export default function CompetitorAnalysisPage() {
   const { activeProjectId, activeProjectName } = useProject();
-  const { jobs, isLoading, refetch, createJobs, deleteJobs, retryJob } = useJobs(activeProjectId, { sort: "desc" });
+  const { jobs, isLoading, refetch, createJobs, deleteJobs, retryJob, cancelJob } = useJobs(activeProjectId, { sort: "desc" });
 
   // Job config state — product-based since 2026-06-26.
   const [platforms,    setPlatforms]    = useState<PlatformName[]>(["Shopee"]);
+  const [country,      setCountry]      = useState<string>("ID");
   const [products,     setProducts]     = useState<{ brand: string; flavour: string; volume: string; type: string }[]>([
     { brand: "", flavour: "", volume: "", type: "" },
   ]);
@@ -93,6 +108,7 @@ export default function CompetitorAnalysisPage() {
 
   function reset() {
     setPlatforms(["Shopee"]);
+    setCountry("ID");
     setProducts([{ brand: "", flavour: "", volume: "", type: "" }]);
     setOfficialMode("all");
     setSpecificShops("");
@@ -100,6 +116,13 @@ export default function CompetitorAnalysisPage() {
     setApifyKey("");
     setFeedback(null);
   }
+
+  // Tokopedia is Indonesia-only — when the user picks a non-ID country, auto-untoggle it.
+  useEffect(() => {
+    if (country !== "ID") {
+      setPlatforms((prev) => prev.filter((p) => p !== "Tokopedia"));
+    }
+  }, [country]);
 
   function updateProduct(i: number, patch: Partial<{ brand: string; flavour: string; volume: string; type: string }>) {
     setProducts((prev) => prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
@@ -145,6 +168,7 @@ export default function CompetitorAnalysisPage() {
       const shopList = specificShops.split(",").map((s) => s.trim()).filter(Boolean);
       const config: EcomJobConfig = {
         platforms,
+        country,
         products: cleanProducts,
         official_store_filter: officialMode,
         ...(officialMode === "specific_shops" ? { specific_shops: shopList } : {}),
@@ -199,6 +223,47 @@ export default function CompetitorAnalysisPage() {
   useEffect(() => {
     if (previewOpen) loadPreview();
   }, [previewOpen, loadPreview]);
+
+  // ── Real-time listings subscription ────────────────────────────────────────
+  // Pushes new ecom_listings rows into the preview as the worker writes them,
+  // so the user doesn't have to refresh manually. Requires the table to be
+  // added to the supabase_realtime publication (see sql/ecom_listings.sql).
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`ecom-listings:${activeProjectId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "ecom_listings",
+          filter: `project_id=eq.${activeProjectId}`,
+        },
+        (payload) => {
+          const r = payload.new as ListingPreviewRow;
+          setPreviewRows((prev) => {
+            // Cap at 50 like loadPreview, newest first, dedupe by listing_id.
+            const head = [r, ...(prev ?? []).filter((x) => x.listing_id !== r.listing_id)];
+            return head.slice(0, 50);
+          });
+          if (!previewOpen) setPreviewOpen(true);   // pop the preview open on first write
+        }
+      )
+      .subscribe();
+    return () => { channel.unsubscribe(); };
+  }, [activeProjectId, previewOpen]);
+
+  // Auto-open the preview while a job is processing so the user sees rows
+  // land in real time without having to click Show.
+  const hasActiveJob = useMemo(
+    () => ecomJobs.some((j) => j.status === "PENDING" || j.status === "AUTO_PROCESSING"),
+    [ecomJobs]
+  );
+  useEffect(() => {
+    if (hasActiveJob && !previewOpen) setPreviewOpen(true);
+  }, [hasActiveJob, previewOpen]);
 
   // ── Clear listings ─────────────────────────────────────────────────────────
 
@@ -315,28 +380,46 @@ export default function CompetitorAnalysisPage() {
       <section className="bg-card border border-border rounded-2xl p-6 space-y-6">
         <h2 className="text-sm font-mono uppercase tracking-wider text-muted-foreground">Configure scrape</h2>
 
-        {/* Platforms */}
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">Platforms</p>
-          <div className="flex gap-2">
-            {PLATFORMS.map((p) => {
-              const active = platforms.includes(p);
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => togglePlatform(p)}
-                  className="px-4 py-2 text-sm rounded-xl border transition-colors"
-                  style={{
-                    background: active ? `${ACCENT}1a` : "transparent",
-                    borderColor: active ? `${ACCENT}88` : "var(--border)",
-                    color: active ? ACCENT : "var(--foreground)",
-                  }}
-                >
-                  {p}
-                </button>
-              );
-            })}
+        {/* Country + Platforms */}
+        <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-4">
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">Country / marketplace</p>
+            <select
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              className={`w-full ${inputCls}`}
+            >
+              {COUNTRIES.map((c) => (
+                <option key={c.code} value={c.code}>{c.label} ({c.code})</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">Passed to the Shopee actor's <code>country</code> field. Tokopedia is Indonesia-only.</p>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">Platforms</p>
+            <div className="flex gap-2">
+              {PLATFORMS.map((p) => {
+                const active = platforms.includes(p);
+                const disabled = p === "Tokopedia" && country !== "ID";
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => !disabled && togglePlatform(p)}
+                    disabled={disabled}
+                    title={disabled ? "Tokopedia is Indonesia-only — pick country ID" : undefined}
+                    className="px-4 py-2 text-sm rounded-xl border transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    style={{
+                      background: active ? `${ACCENT}1a` : "transparent",
+                      borderColor: active ? `${ACCENT}88` : "var(--border)",
+                      color: active ? ACCENT : "var(--foreground)",
+                    }}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -707,6 +790,15 @@ export default function CompetitorAnalysisPage() {
                         )}
                       </td>
                       <td className="py-2 text-right space-x-1">
+                        {(j.status === "PENDING" || j.status === "AUTO_PROCESSING") && (
+                          <button
+                            onClick={() => cancelJob(j.job_id).then(refetch)}
+                            className="px-2 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-yellow-400"
+                            title="Mark the job FAILED so the worker skips it. If the worker is mid-actor-call, the cancel is best-effort — restart the Railway worker if it's stuck."
+                          >
+                            Cancel
+                          </button>
+                        )}
                         {j.status === "FAILED" && (
                           <button
                             onClick={() => retryJob(j.job_id).then(refetch)}

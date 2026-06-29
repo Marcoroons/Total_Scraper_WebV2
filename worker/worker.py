@@ -467,16 +467,18 @@ def _ecom_call_actor(actor: str, run_input: dict, apify_token: str) -> list:
         print(f"      {actor} returned {len(items)} items; first-item keys: {list(first.keys())[:25]}")
     return items
 
-def _shopee_run(target: str, mode: str, max_items: int, apify_token: str) -> list:
+def _shopee_run(target: str, mode: str, max_items: int, apify_token: str, country: str = "ID") -> list:
     """Call gio21/shopee-scraper for one search target.
-    mode='keyword': target is a search term. mode='shop': target is a shop URL or username."""
+    mode='keyword': target is a search term. mode='shop': target is a shop URL or username.
+    country: ISO-2 marketplace code (ID/MY/SG/TH/VN/PH/TW/BR/MX). Defaults to ID."""
+    cc = (country or "ID").upper()
     if mode == "shop":
-        run_input = {"shopUrls": [target], "country": "ID", "maxItems": max_items}
+        run_input = {"shopUrls": [target], "country": cc, "maxItems": max_items}
     else:
-        run_input = {"keyword": target, "country": "ID", "maxItems": max_items}
+        run_input = {"keyword": target, "country": cc, "maxItems": max_items}
     return _ecom_call_actor(ECOM_ACTORS["Shopee"], run_input, apify_token)
 
-def _tokopedia_run(target: str, mode: str, max_items: int, apify_token: str) -> list:
+def _tokopedia_run(target: str, mode: str, max_items: int, apify_token: str, country: str = "ID") -> list:
     """Call jupri/tokopedia-scraper for one search target.
     Confirmed input shape from the actor's console UI:
       - 'query' (array of strings) — search terms
@@ -698,6 +700,7 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     of_filter = (cfg.get("official_store_filter") or "all").lower()
     specific_shops = [str(s).strip() for s in (cfg.get("specific_shops") or []) if str(s).strip()]
     cap_per   = max(10, min(int(cfg.get("max_listings_per_product") or 50), 200))
+    country   = (cfg.get("country") or "ID").upper()
 
     # ── Build the product list, accepting both the new shape and the legacy ──
     products: list = []
@@ -725,7 +728,12 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     notes: list = []
 
     for platform in platforms:
-        print(f"   🛒 Ecom {platform}: {len(products)} product(s), cap {cap_per}/product")
+        # Tokopedia is Indonesia-only — silently skip if the user picked a non-ID country.
+        if platform == "Tokopedia" and country != "ID":
+            notes.append(f"Tokopedia: skipped (Tokopedia is Indonesia-only; country={country})")
+            print(f"   ⚠️ Tokopedia skipped — Tokopedia is Indonesia-only (country={country})")
+            continue
+        print(f"   🛒 Ecom {platform} [{country}]: {len(products)} product(s), cap {cap_per}/product")
         runner = _shopee_run if platform == "Shopee" else _tokopedia_run
         mapper = _shopee_to_rows if platform == "Shopee" else _tokopedia_to_rows
 
@@ -745,7 +753,7 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
             # fields drop out cleanly thanks to the join + strip.
             query   = " ".join(s for s in (brand, flavour, volume, ptype) if s).strip()
             try:
-                items = runner(query, "keyword", cap_per, apify_token)
+                items = runner(query, "keyword", cap_per, apify_token, country)
             except Exception as e:
                 print(f"      '{query}' FAILED: {str(e)[:200]}")
                 actor_errors += 1

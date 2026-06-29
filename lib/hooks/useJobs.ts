@@ -19,6 +19,9 @@ export interface EcomJobConfig {
   official_store_filter: "all" | "official_only" | "non_official_only" | "specific_shops";
   specific_shops?: string[];                     // only used when filter === 'specific_shops'
   max_listings_per_product: number;              // hard cap per product — fewer is fine, precision > volume
+  // Marketplace ISO-2 code passed to the Shopee actor's `country` field. Default 'ID'.
+  // Tokopedia is Indonesia-only, so non-ID countries should not select Tokopedia.
+  country?: string;
 
   // ── legacy fields (still readable for jobs queued before the redesign) ──
   search_mode?: "keyword" | "shop";
