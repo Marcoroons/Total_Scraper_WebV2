@@ -1210,14 +1210,20 @@ def process_job(job):
         if jtype == "Trend Discovery (Hashtag)":
             tags = [h.replace("#","").strip() for h in target.split(",") if h.strip()]
             if is_ig:
+                # actor's resultsLimit is PER HASHTAG — overshoots when multiple
+                # hashtags are passed. Cap the output to `limit` total below.
                 data = call_apify(actors["hashtag"],{"hashtags":tags,"resultsLimit":limit},apikey)
+                data = (data or [])[:limit]   # hard cap — fixes the "asked for 10, got 25" overshoot
                 payload = [{"project_id":pid,"platform":plat,"search_target":target,
                             "video_url":d.get("url"),"username":d.get("ownerUsername"),
                             "caption":d.get("caption",""),"play_count":int(d.get("videoPlayCount") or d.get("videoViewCount") or d.get("viewCount") or d.get("playCount") or 0),
                             "likes":d.get("likesCount",0),"comments":d.get("commentsCount",0),
                             "shares":d.get("sharesCount",0),"video_duration":int(d.get("videoDuration",0)),
                             "audio_track":(d.get("audioTrack") or {}).get("name","Original Audio"),
-                            "content_type":d.get("type","Video")} for d in data if d.get("url")]
+                            "content_type":d.get("type","Video"),
+                            # actor's 'timestamp' field is an ISO string ('2024-06-29T08:00:00.000Z')
+                            "posted_at":d.get("timestamp") or d.get("takenAt") or None,
+                            } for d in data if d.get("url")]
             else:
                 # Region-lock TikTok to Indonesia: scrape through an ID residential
                 # proxy (biases TikTok's results to ID at the source), over-fetch,
@@ -1246,7 +1252,12 @@ def process_job(job):
                             "likes":d.get("diggCount",0),"comments":d.get("commentCount",0),
                             "shares":d.get("shareCount",0),"video_duration":int((d.get("videoMeta") or {}).get("duration") or 0),
                             "audio_track":(d.get("musicMeta") or {}).get("musicName","Original Audio"),
-                            "content_type":"Video"} for d in data if d.get("webVideoUrl") or d.get("videoUrl")]
+                            "content_type":"Video",
+                            # clockworks/tiktok-scraper returns 'createTimeISO' or numeric 'createTime'
+                            "posted_at": d.get("createTimeISO")
+                                or (datetime.datetime.fromtimestamp(int(d["createTime"]), tz=datetime.timezone.utc).isoformat()
+                                    if d.get("createTime") else None),
+                            } for d in data if d.get("webVideoUrl") or d.get("videoUrl")]
             db.upsert_trend_discovery(supabase, payload)
 
         elif jtype == "Trend Discovery (User Profile)":

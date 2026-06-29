@@ -16,13 +16,31 @@ interface TrendRow {
   platform: string; search_target: string; video_url: string; username: string;
   caption: string; play_count: number; likes: number; comments: number;
   shares: number; video_duration: number; audio_track: string; content_type: string;
+  posted_at?: string | null;
 }
 
 interface Kol {
   username: string; platform: string; posts: number; reach: number; avgViews: number;
+  likes: number; comments: number; shares: number;
   engagement: number; er: number; searches: number;
   topPostUrl: string; topPostViews: number; score: number;
+  newestPostedAt: string | null;
 }
+
+// Heuristic patterns that flag brand / business / reseller accounts rather
+// than individual KOLs. User can toggle the bundle on/off and extend via a
+// custom-pattern field.
+const BUSINESS_PATTERNS = [
+  "official", ".id", "_id", "indonesia", "store", "shop", "brand", "mart", "resmi", ".co", "ltd", "inc",
+];
+
+const DATE_WINDOWS: { value: number; label: string }[] = [
+  { value: 0,   label: "All time" },
+  { value: 7,   label: "Last 7 days" },
+  { value: 14,  label: "Last 14 days" },
+  { value: 30,  label: "Last 30 days" },
+  { value: 90,  label: "Last 90 days" },
+];
 
 // Has this creator been scraped (profile-audited) before — across any project/team?
 interface KnownInfo { posts: number; projects: number; lastSeen: string | null }
@@ -67,6 +85,10 @@ export default function KolFinderPage() {
   const [known,    setKnown]    = useState<KnownMap>({});
   const [hideKnown, setHideKnown] = useState(false);
   const [hashtagFilter, setHashtagFilter] = useState("");
+  // KOL-quality filters
+  const [hideBusiness, setHideBusiness] = useState(true);
+  const [customExclude, setCustomExclude] = useState("");
+  const [dateWindowDays, setDateWindowDays] = useState(0);
 
   const loadResults = useCallback(async () => {
     if (!activeProjectId) { setRows([]); return; }
@@ -99,41 +121,70 @@ export default function KolFinderPage() {
   // No follower counts exist for hashtag scrapes, so "outreach" is derived
   // from demonstrated reach + engagement + how often a creator surfaces.
   const roster = useMemo<Kol[]>(() => {
-    const filtered = rows.filter((r) =>
-      r.platform === platform && r.username &&
-      (hashtagFilter === "" ||
-        (r.search_target || "").split(",").some((t) => t.replace(/#/g, "").trim() === hashtagFilter))
-    );
+    // Date-window cutoff (in epoch ms). 0 = no date filter.
+    const cutoffMs = dateWindowDays > 0
+      ? Date.now() - dateWindowDays * 86400000
+      : 0;
+
+    const filtered = rows.filter((r) => {
+      if (r.platform !== platform || !r.username) return false;
+      if (hashtagFilter !== "" &&
+          !(r.search_target || "").split(",").some((t) => t.replace(/#/g, "").trim() === hashtagFilter))
+        return false;
+      // Date filter — posts without a posted_at are kept ONLY when no
+      // date window is set, so the filter is strict ("last N days" means
+      // posts with a known date in that window).
+      if (cutoffMs > 0) {
+        if (!r.posted_at) return false;
+        const t = new Date(r.posted_at).getTime();
+        if (!Number.isFinite(t) || t < cutoffMs) return false;
+      }
+      return true;
+    });
     if (filtered.length === 0) return [];
 
     type Acc = {
       username: string; platform: string; posts: number; reach: number;
-      engagement: number; searches: Set<string>; topPostUrl: string; topPostViews: number;
+      likes: number; comments: number; shares: number;
+      searches: Set<string>; topPostUrl: string; topPostViews: number;
+      newestPostedAt: string | null;
     };
     const map = new Map<string, Acc>();
     for (const r of filtered) {
       const key = r.username.toLowerCase();
       const cur = map.get(key) ?? {
         username: r.username, platform: r.platform, posts: 0, reach: 0,
-        engagement: 0, searches: new Set<string>(), topPostUrl: "", topPostViews: -1,
+        likes: 0, comments: 0, shares: 0,
+        searches: new Set<string>(), topPostUrl: "", topPostViews: -1,
+        newestPostedAt: null as string | null,
       };
       const plays = Number(r.play_count) || 0;
       cur.posts += 1;
       cur.reach += plays;
-      cur.engagement += (Number(r.likes) || 0) + (Number(r.comments) || 0) + (Number(r.shares) || 0);
+      cur.likes    += Number(r.likes)    || 0;
+      cur.comments += Number(r.comments) || 0;
+      cur.shares   += Number(r.shares)   || 0;
       if (r.search_target) cur.searches.add(r.search_target);
       if (plays > cur.topPostViews) { cur.topPostViews = plays; cur.topPostUrl = r.video_url; }
+      if (r.posted_at && (!cur.newestPostedAt || r.posted_at > cur.newestPostedAt)) {
+        cur.newestPostedAt = r.posted_at;
+      }
       map.set(key, cur);
     }
 
-    const list = Array.from(map.values()).map((c) => ({
-      username: c.username, platform: c.platform, posts: c.posts, reach: c.reach,
-      avgViews: c.posts ? Math.round(c.reach / c.posts) : 0,
-      engagement: c.engagement,
-      er: c.reach ? (c.engagement / c.reach) * 100 : 0,
-      searches: c.searches.size,
-      topPostUrl: c.topPostUrl, topPostViews: Math.max(0, c.topPostViews), score: 0,
-    }));
+    const list = Array.from(map.values()).map((c) => {
+      const engagement = c.likes + c.comments + c.shares;
+      return {
+        username: c.username, platform: c.platform, posts: c.posts, reach: c.reach,
+        avgViews: c.posts ? Math.round(c.reach / c.posts) : 0,
+        likes: c.likes, comments: c.comments, shares: c.shares,
+        engagement,
+        er: c.reach ? (engagement / c.reach) * 100 : 0,
+        searches: c.searches.size,
+        topPostUrl: c.topPostUrl, topPostViews: Math.max(0, c.topPostViews), score: 0,
+        newestPostedAt: c.newestPostedAt,
+      };
+    });
 
     // Composite score, normalised against the strongest creator in the pool.
     const maxReach = Math.max(...list.map((k) => k.reach), 1);
@@ -143,7 +194,16 @@ export default function KolFinderPage() {
       ...k,
       score: Math.round(100 * (0.5 * (k.reach / maxReach) + 0.3 * (k.er / maxEr) + 0.2 * (k.posts / maxPosts))),
     }));
-  }, [rows, platform, hashtagFilter]);
+  }, [rows, platform, hashtagFilter, dateWindowDays]);
+
+  // Compiled exclusion tester. Returns true if username should be excluded.
+  const isExcluded = useCallback((username: string): boolean => {
+    const u = username.toLowerCase();
+    if (hideBusiness && BUSINESS_PATTERNS.some((p) => u.includes(p))) return true;
+    const customs = customExclude.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (customs.length && customs.some((p) => u.includes(p))) return true;
+    return false;
+  }, [hideBusiness, customExclude]);
 
   // Look up which roster creators we've already scraped, across all projects/teams.
   useEffect(() => {
@@ -164,7 +224,11 @@ export default function KolFinderPage() {
   const isKnown = useCallback((u: string) => (known[u.toLowerCase()]?.posts ?? 0) > 0, [known]);
 
   const ranked = useMemo(() => {
-    const f = roster.filter((k) => k.posts >= minPosts && (!hideKnown || !isKnown(k.username)));
+    const f = roster.filter((k) =>
+      k.posts >= minPosts
+      && (!hideKnown || !isKnown(k.username))
+      && !isExcluded(k.username)
+    );
     const sorters: Record<SortKey, (a: Kol, b: Kol) => number> = {
       score:    (a, b) => b.score - a.score,
       reach:    (a, b) => b.reach - a.reach,
@@ -173,14 +237,24 @@ export default function KolFinderPage() {
       avgViews: (a, b) => b.avgViews - a.avgViews,
     };
     return [...f].sort(sorters[sortKey]);
-  }, [roster, sortKey, minPosts, hideKnown, isKnown]);
+  }, [roster, sortKey, minPosts, hideKnown, isKnown, isExcluded]);
 
   // Suggested picks: top by score that appear more than once (not one-off flukes).
   const suggested = useMemo(() => {
-    const base = roster.filter((k) => !hideKnown || !isKnown(k.username));
+    const base = roster.filter((k) => (!hideKnown || !isKnown(k.username)) && !isExcluded(k.username));
     const repeat = base.filter((k) => k.posts >= 2).sort((a, b) => b.score - a.score);
     return (repeat.length ? repeat : [...base].sort((a, b) => b.score - a.score)).slice(0, 4);
-  }, [roster, hideKnown, isKnown]);
+  }, [roster, hideKnown, isKnown, isExcluded]);
+
+  // Dedupe summary — at-a-glance "12 new / 18 in DB / 4 excluded".
+  const summary = useMemo(() => {
+    let news = 0, inDb = 0, excluded = 0;
+    for (const k of roster) {
+      if (isExcluded(k.username)) { excluded++; continue; }
+      if (isKnown(k.username)) inDb++; else news++;
+    }
+    return { news, inDb, excluded, total: roster.length };
+  }, [roster, isKnown, isExcluded]);
 
   function parseTags() {
     return tags.split(/[\n,]+/).map((t) => t.replace(/#/g, "").trim()).filter(Boolean);
@@ -209,13 +283,19 @@ export default function KolFinderPage() {
 
   function exportCsv() {
     if (ranked.length === 0) return;
-    const cols = ["rank", "username", "platform", "kol_score", "appearances", "total_reach", "avg_views", "total_engagement", "engagement_rate_pct", "hashtag_searches", "scraped_before", "db_posts_on_file", "db_projects", "profile_url", "top_post_url"];
+    const cols = [
+      "rank", "username", "platform", "kol_score", "appearances", "total_reach", "avg_views",
+      "total_likes", "total_comments", "total_shares", "total_engagement", "engagement_rate_pct",
+      "hashtag_searches", "latest_post_date", "scraped_before", "db_posts_on_file", "db_projects",
+      "profile_url", "top_post_url",
+    ];
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const lines = ranked.map((k, i) => {
       const info = known[k.username.toLowerCase()];
       return [
         i + 1, k.username, k.platform, k.score, k.posts, k.reach, k.avgViews,
-        k.engagement, k.er.toFixed(1), k.searches,
+        k.likes, k.comments, k.shares, k.engagement, k.er.toFixed(1),
+        k.searches, k.newestPostedAt ?? "",
         info?.posts ? "yes" : "no", info?.posts ?? 0, info?.projects ?? 0,
         profileUrl(k.username, k.platform), k.topPostUrl,
       ].map(esc).join(",");
@@ -301,38 +381,75 @@ export default function KolFinderPage() {
 
         {/* ── Ranked roster ── */}
         <div>
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtag</span>
-              <select value={hashtagFilter} onChange={(e) => setHashtagFilter(e.target.value)}
-                className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring max-w-[170px]">
-                <option value="">All hashtags{availableHashtags.length ? ` (${availableHashtags.length})` : ""}</option>
-                {availableHashtags.map((h) => <option key={h} value={h}>#{h}</option>)}
-              </select>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Rank by</span>
-              <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
-                className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
-                {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-              </select>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Min appearances</span>
-              <input type="number" min={1} max={50} value={minPosts}
-                onChange={(e) => setMinPosts(Math.max(1, Number(e.target.value) || 1))}
-                className="w-16 px-2 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
-              <label className="flex items-center gap-1.5 text-xs cursor-pointer ml-2 text-muted-foreground" title="Hide creators we've already profile-scraped in any project or team">
+          <div className="space-y-3 mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtag</span>
+                <select value={hashtagFilter} onChange={(e) => setHashtagFilter(e.target.value)}
+                  className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring max-w-[170px]">
+                  <option value="">All hashtags{availableHashtags.length ? ` (${availableHashtags.length})` : ""}</option>
+                  {availableHashtags.map((h) => <option key={h} value={h}>#{h}</option>)}
+                </select>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Rank by</span>
+                <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
+                  className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring">
+                  {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Posted</span>
+                <select value={dateWindowDays} onChange={(e) => setDateWindowDays(Number(e.target.value))}
+                  className="px-2.5 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  title="Filter to creators whose posts in this scrape were made within the chosen window. Posts without a post-date are excluded once a window is set.">
+                  {DATE_WINDOWS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                </select>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">Min appearances</span>
+                <input type="number" min={1} max={50} value={minPosts}
+                  onChange={(e) => setMinPosts(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-16 px-2 py-1.5 text-xs rounded-lg bg-input border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={loadResults} title="Refresh" className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors">
+                  {loading ? <CatSpinner size={16} /> : <RefreshCw className="w-4 h-4" />}
+                </button>
+                <button onClick={exportCsv} disabled={ranked.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors hover:bg-primary/10 disabled:opacity-40"
+                  style={{ borderColor: `${ACCENT}55`, color: ACCENT }}>
+                  <Download className="w-3.5 h-3.5" /> CSV shortlist
+                </button>
+              </div>
+            </div>
+
+            {/* Quality filters — exclude business accounts + dedupe summary */}
+            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <label className="flex items-center gap-1.5 cursor-pointer" title={`Exclude usernames containing any of: ${BUSINESS_PATTERNS.join(", ")}`}>
+                <input type="checkbox" checked={hideBusiness} onChange={(e) => setHideBusiness(e.target.checked)} className="accent-primary" />
+                Exclude brand / shop accounts
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer" title="Hide creators we've already profile-scraped across any project or team">
                 <input type="checkbox" checked={hideKnown} onChange={(e) => setHideKnown(e.target.checked)} className="accent-primary" />
                 Hide already-scraped
               </label>
+              <input
+                type="text"
+                value={customExclude}
+                onChange={(e) => setCustomExclude(e.target.value)}
+                placeholder="custom exclusions: comma-separated (e.g. mycompetitor, partner)"
+                className="flex-1 min-w-[200px] px-2 py-1 text-xs rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={loadResults} title="Refresh" className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors">
-                {loading ? <CatSpinner size={16} /> : <RefreshCw className="w-4 h-4" />}
-              </button>
-              <button onClick={exportCsv} disabled={ranked.length === 0}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors hover:bg-primary/10 disabled:opacity-40"
-                style={{ borderColor: `${ACCENT}55`, color: ACCENT }}>
-                <Download className="w-3.5 h-3.5" /> CSV shortlist
-              </button>
-            </div>
+
+            {roster.length > 0 && (
+              <div className="text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
+                <span><span className="text-foreground font-semibold">{summary.total}</span> creator{summary.total !== 1 ? "s" : ""} found</span>
+                <span>· <span style={{ color: "#22d3ee" }}>{summary.news}</span> new</span>
+                <span>· <span style={{ color: "#34d399" }}>{summary.inDb}</span> already in DB</span>
+                {summary.excluded > 0 && (
+                  <span>· <span className="text-yellow-400">{summary.excluded}</span> filtered out{hideBusiness || customExclude.trim() ? " by exclusions" : ""}</span>
+                )}
+                {dateWindowDays > 0 && (
+                  <span>· posted in last {dateWindowDays} day{dateWindowDays !== 1 ? "s" : ""}</span>
+                )}
+              </div>
+            )}
           </div>
 
           {roster.length === 0 ? (
@@ -388,15 +505,15 @@ export default function KolFinderPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead><tr style={{ background: "#0f1e35" }}>
-                      {["#", "Creator", "Score", "Reach", "Avg views", "Eng. rate", "Posts", ""].map((h) => (
-                        <th key={h} className="px-4 py-2.5 text-left text-[10px] font-mono uppercase tracking-wider text-muted-foreground">{h}</th>
+                      {["#", "Creator", "Score", "Reach", "Avg views", "Likes", "Comments", "Shares", "Eng. rate", "Posts", "Latest", ""].map((h) => (
+                        <th key={h} className="px-3 py-2.5 text-left text-[10px] font-mono uppercase tracking-wider text-muted-foreground">{h}</th>
                       ))}
                     </tr></thead>
                     <tbody>
                       {ranked.map((k, i) => (
                         <tr key={k.username} className="border-t hover:bg-white/[0.02] transition-colors" style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-                          <td className="px-4 py-3 text-muted-foreground">{i + 1}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3 text-muted-foreground">{i + 1}</td>
+                          <td className="px-3 py-3">
                             <a href={profileUrl(k.username, k.platform)} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:underline">@{k.username}</a>
                             <span className="flex items-center gap-1.5 mt-0.5">
                               {(() => {
@@ -418,12 +535,20 @@ export default function KolFinderPage() {
                               {k.searches > 1 && <span className="text-[10px] text-muted-foreground">· {k.searches} searches</span>}
                             </span>
                           </td>
-                          <td className="px-4 py-3 font-bold" style={{ color: ACCENT }}>{k.score}</td>
-                          <td className="px-4 py-3 font-medium text-foreground">{fmt(k.reach)}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{fmt(k.avgViews)}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{k.er.toFixed(1)}%</td>
-                          <td className="px-4 py-3 text-muted-foreground">{k.posts}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3 font-bold" style={{ color: ACCENT }}>{k.score}</td>
+                          <td className="px-3 py-3 font-medium text-foreground">{fmt(k.reach)}</td>
+                          <td className="px-3 py-3 text-muted-foreground">{fmt(k.avgViews)}</td>
+                          <td className="px-3 py-3 text-muted-foreground">{fmt(k.likes)}</td>
+                          <td className="px-3 py-3 text-muted-foreground">{fmt(k.comments)}</td>
+                          <td className="px-3 py-3 text-muted-foreground">{fmt(k.shares)}</td>
+                          <td className="px-3 py-3 text-muted-foreground">{k.er.toFixed(1)}%</td>
+                          <td className="px-3 py-3 text-muted-foreground">{k.posts}</td>
+                          <td className="px-3 py-3 text-muted-foreground text-xs whitespace-nowrap">
+                            {k.newestPostedAt
+                              ? new Date(k.newestPostedAt).toLocaleDateString("en-SG", { day: "2-digit", month: "short", year: "2-digit" })
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-3">
                             {k.topPostUrl && (
                               <a href={k.topPostUrl} target="_blank" rel="noopener noreferrer" title="Top post" className="text-muted-foreground hover:text-primary inline-flex">
                                 <ExternalLink className="w-3.5 h-3.5" />

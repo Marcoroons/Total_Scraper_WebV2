@@ -34,11 +34,24 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("trend_discovery")
-    .select("platform, search_target, video_url, username, caption, play_count, likes, comments, shares, video_duration, audio_track, content_type")
+    .select("platform, search_target, video_url, username, caption, play_count, likes, comments, shares, video_duration, audio_track, content_type, posted_at")
     .eq("project_id", projectId);
   if (platform) query = query.eq("platform", platform);
 
-  const { data, error } = await query.order("play_count", { ascending: false }).limit(1000);
+  const first = await query.order("play_count", { ascending: false }).limit(1000);
+  let data: unknown = first.data;
+  let error = first.error;
+  // Column-safe: if posted_at hasn't been migrated yet, retry without it.
+  if (error && /posted_at/i.test(error.message)) {
+    let retry = supabase
+      .from("trend_discovery")
+      .select("platform, search_target, video_url, username, caption, play_count, likes, comments, shares, video_duration, audio_track, content_type")
+      .eq("project_id", projectId);
+    if (platform) retry = retry.eq("platform", platform);
+    const second = await retry.order("play_count", { ascending: false }).limit(1000);
+    data = second.data;
+    error = second.error;
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ rows: data ?? [] });
 }

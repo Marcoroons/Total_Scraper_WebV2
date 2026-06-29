@@ -136,8 +136,20 @@ def upsert_comments(supabase, platform: str, rows: list[dict]) -> None:
 
 
 def upsert_trend_discovery(supabase, rows: list[dict]) -> None:
-    if rows:
+    """Column-safe upsert — if posted_at hasn't been migrated yet
+    (sql/trend_discovery_posted_at.sql), the worker still writes the
+    rest of the columns so KOL Finder keeps working."""
+    if not rows:
+        return
+    try:
         supabase.table("trend_discovery").upsert(rows, on_conflict="video_url").execute()
+    except Exception as e:
+        msg = str(e).lower()
+        if "posted_at" in msg:
+            stripped = [{k: v for k, v in r.items() if k != "posted_at"} for r in rows]
+            supabase.table("trend_discovery").upsert(stripped, on_conflict="video_url").execute()
+        else:
+            raise
 
 
 def get_campaign_videos(supabase, platform: str, urls: list[str]) -> list[dict]:
