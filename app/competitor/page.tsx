@@ -31,9 +31,9 @@ const COUNTRIES: { code: string; label: string }[] = [
 
 const OFFICIAL_FILTERS: { value: EcomJobConfig["official_store_filter"]; label: string; hint: string }[] = [
   { value: "all",                 label: "All sellers",        hint: "Include every seller surfaced by the search." },
-  { value: "official_only",       label: "Official store only", hint: "Shop name must include the BRAND + 'Official' or 'Mall'. Filters out other brands' Mall stores." },
+  { value: "official_only",       label: "Official store only", hint: "Shop name contains 'Official' or 'Mall' — works for parent-brand stores like Nestlé Indonesia (which sells Nescafe). Brand purity is handled by title-validation upstream." },
   { value: "non_official_only",   label: "Non-official only",  hint: "Exclude any 'Official' / 'Mall' shop — useful for reseller / grey-market pricing." },
-  { value: "specific_shops",      label: "Specific shop(s)",   hint: "Match listings whose shopName contains one of the names you list below. Case-insensitive, comma-separated." },
+  { value: "specific_shops",      label: "Specific shop(s)",   hint: "Target named shops. Case- and accent-insensitive ('nestle' matches 'Nestlé')." },
 ];
 
 const inputCls =
@@ -572,12 +572,12 @@ export default function CompetitorAnalysisPage() {
                 <code>Official store only</code> returns 0 (then switch back once you find the right shop name).
               </p>
               <p>
-                <span className="text-foreground font-medium">Official store only</span> — cleanest signal,
-                the brand's own pricing/availability. Shop name must contain the brand + <em>Official</em> / <em>Mall</em>.
-                <span className="text-yellow-400/90"> Watch out:</span> many brands are sold by a
-                <em> parent-company</em> store, not a brand-named one — e.g. <strong>Nescafe</strong> is sold by
-                <em> Nestlé Indonesia Official Store</em>, not "Nescafe Official Store". When this mode returns
-                0, switch to <strong>Specific shop(s)</strong> below and type the parent-company name.
+                <span className="text-foreground font-medium">Official store only</span> — keeps any shop whose
+                name reads as <em>Official</em> or <em>Mall</em>. Works automatically for
+                <strong> parent-brand stores</strong> like <em>Nestlé Indonesia Official Store</em> (which
+                sells Nescafe / KitKat / Milo) — the title-validation upstream already enforces brand
+                purity, so the shop check stays simple. This is the right default for clean brand
+                benchmarking.
               </p>
               <p>
                 <span className="text-foreground font-medium">Non-official only</span> — excludes any Mall /
@@ -585,19 +585,20 @@ export default function CompetitorAnalysisPage() {
                 or seeing how much markup retailers add on top of the brand's MSRP.
               </p>
               <p>
-                <span className="text-foreground font-medium">Specific shop(s)</span> — paste the exact shop
-                names you want to track. Examples for Indonesian FMCG:
+                <span className="text-foreground font-medium">Specific shop(s)</span> — use when you want to
+                target ONE seller exactly (e.g. tracking a single competitor's prices over time). Examples:
               </p>
               <ul className="list-disc list-inside pl-3 space-y-0.5">
-                <li><code>Nestlé Indonesia</code> — for Nescafe, KitKat, Milo, Bear Brand, Dancow</li>
-                <li><code>Wings Official</code> — for Top Coffee, Neo Coffee, Mie Sedaap, Floridina</li>
-                <li><code>Indofood</code> — for Indomie, Pop Mie, Indomilk, Pop Ice</li>
-                <li><code>Mayora</code> — for Kopiko, Beng-Beng, Le Minerale, Roma</li>
+                <li><code>Nestlé Indonesia</code> — sells Nescafe, KitKat, Milo, Bear Brand, Dancow</li>
+                <li><code>Wings Official</code> — sells Top Coffee, Neo Coffee, Mie Sedaap, Floridina</li>
+                <li><code>Indofood</code> — sells Indomie, Pop Mie, Indomilk, Pop Ice</li>
+                <li><code>Mayora</code> — sells Kopiko, Beng-Beng, Le Minerale, Roma</li>
                 <li><code>OATSIDE Official</code>, <code>Cimory Official</code> — single-brand companies use brand-name stores directly</li>
               </ul>
               <p>
                 Diacritics and capitalization are normalized automatically — typing <code>nestle indonesia</code> matches
-                <code> Nestlé Indonesia Official Store</code>.
+                <code> Nestlé Indonesia Official Store</code>. Each entry's tokens must ALL appear in the shop name;
+                multiple entries (comma-separated) are OR&apos;d.
               </p>
             </div>
           </details>

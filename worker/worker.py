@@ -469,13 +469,21 @@ def _ecom_call_actor(actor: str, run_input: dict, apify_token: str) -> list:
 
 def _shopee_run(target: str, mode: str, max_items: int, apify_token: str, country: str = "ID") -> list:
     """Call gio21/shopee-scraper for one search target.
-    mode='keyword': target is a search term. mode='shop': target is a shop URL or username.
-    country: ISO-2 marketplace code (ID/MY/SG/TH/VN/PH/TW/BR/MX). Defaults to ID."""
+    Per the actor's input schema (verified from console screenshots 2026-06-29):
+      - 'location'   — single keyword OR a shop/category URL ('the most reliable mode')
+      - 'country'    — ISO-2 marketplace code
+      - 'maxItems'   — hard cap
+      - 'priceSlicing' — opt-in price-range slicing for fuller coverage; off here
+    'location' handles both keyword and URL inputs, so we use it for both modes.
+    The earlier 'keyword' field name was wrong and the actor was returning
+    default/popular items rather than searching for our query."""
     cc = (country or "ID").upper()
-    if mode == "shop":
-        run_input = {"shopUrls": [target], "country": cc, "maxItems": max_items}
-    else:
-        run_input = {"keyword": target, "country": cc, "maxItems": max_items}
+    run_input = {
+        "location":     target,
+        "country":      cc,
+        "maxItems":     max_items,
+        "priceSlicing": False,
+    }
     return _ecom_call_actor(ECOM_ACTORS["Shopee"], run_input, apify_token)
 
 def _tokopedia_run(target: str, mode: str, max_items: int, apify_token: str, country: str = "ID") -> list:
@@ -582,48 +590,43 @@ def _shop_name_of(item: dict) -> str:
     return str(sn).strip()
 
 
-def _is_brand_official_shop(shop_name: str, brand: str) -> bool:
-    """Strict 'official store for THIS brand' check.
-    gio21/shopee-scraper doesn't expose isMall/isOfficial as a boolean, and a
-    bare 'official' substring lets random brands' Mall stores slip through
-    (verified — Nescafe scrapes were pulling in Wings, Auzy, Maxfood etc.).
-    Require shopName to contain ALL brand tokens AND an 'official'/'mall' marker.
-    Diacritic-normalized so 'Nestlé Indonesia Official' matches a 'Nestle' brand input.
-    KNOWN GAP: many brands are sold by a PARENT-COMPANY official store rather
-    than a brand-named one (Nescafe → Nestlé Indonesia, Top Coffee → Wings).
-    For those, the user should switch to 'Specific shop(s)' mode."""
+def _shop_is_official(shop_name: str) -> bool:
+    """'official_only' check — does the shop name read as an official / Mall shop?
+    Diacritic-normalized so 'Nestlé Indonesia Official' is detected.
+    NOTE: we used to require brand tokens here too, but that broke parent-brand
+    stores (Nescafe sold by 'Nestlé Indonesia Official Store', Top Coffee sold
+    by 'Wings Official', etc.). With title-validation now rejecting off-brand
+    titles at the scrape stage, the shop check can be the simpler 'is this an
+    Official/Mall shop at all?' — title-validation handles brand purity."""
     sn = _norm_text(shop_name)
     if not sn:
         return False
-    if "official" not in sn and "mall" not in sn:
-        return False
-    for tok in _tokens(brand):
-        if tok not in sn:
-            return False
-    return bool(_tokens(brand))
+    return "official" in sn or "mall" in sn
 
 
 def _apply_official_filter(items: list, mode: str, platform: str, brand: str,
                            specific_shops=None) -> list:
     """
     mode='all'                — no filter.
-    mode='official_only'      — shop must be the BRAND's official store
-                                (shopName has all brand tokens + 'official'/'mall').
-    mode='non_official_only'  — exclude ANY shop with 'official'/'mall' in the name,
-                                regardless of brand.
-    mode='specific_shops'     — keep only listings whose shopName matches one of
-                                the user-supplied shop names (case-insensitive
-                                substring; multiple shops are OR'd).
+    mode='official_only'      — keep any shop whose name reads as Official / Mall.
+                                Title-validation has already enforced brand purity
+                                upstream, so this is the simpler 'is the seller a
+                                Mall shop' check (works for parent-brand stores
+                                like 'Nestlé Indonesia Official Store').
+    mode='non_official_only'  — exclude Official / Mall shops.
+    mode='specific_shops'     — token-based, diacritic-normalized match against
+                                a user-supplied shop-name list (see below).
+    `brand` is accepted for backward-compatibility but no longer used by
+    official_only (was previously the brand-strict requirement that broke
+    parent-brand stores).
     """
+    _ = brand   # intentionally unused — keep param for API stability
     if mode == "all" or not mode:
         return items
     if mode == "official_only":
-        return [it for it in items if _is_brand_official_shop(_shop_name_of(it), brand)]
+        return [it for it in items if _shop_is_official(_shop_name_of(it))]
     if mode == "non_official_only":
-        def _any_official(it):
-            sn = _norm_text(_shop_name_of(it))
-            return "official" in sn or "mall" in sn
-        return [it for it in items if not _any_official(it)]
+        return [it for it in items if not _shop_is_official(_shop_name_of(it))]
     if mode == "specific_shops":
         # Token-based match: each user-supplied shop name's tokens (diacritic-
         # normalized) must ALL appear in the listing's normalized shopName.
