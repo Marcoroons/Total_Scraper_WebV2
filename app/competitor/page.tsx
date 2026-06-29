@@ -17,8 +17,9 @@ type PlatformName = (typeof PLATFORMS)[number];
 
 const OFFICIAL_FILTERS: { value: EcomJobConfig["official_store_filter"]; label: string; hint: string }[] = [
   { value: "all",                 label: "All sellers",        hint: "Include every seller surfaced by the search." },
-  { value: "official_only",       label: "Official store only", hint: "Shop name must include the BRAND + 'Official' or 'Mall' (e.g. 'Nescafe Official Store'). Filters out other brands' Mall stores." },
-  { value: "non_official_only",   label: "Non-official only",  hint: "Exclude any shop with 'Official' or 'Mall' in the name — useful for reseller / grey-market pricing." },
+  { value: "official_only",       label: "Official store only", hint: "Shop name must include the BRAND + 'Official' or 'Mall'. Filters out other brands' Mall stores." },
+  { value: "non_official_only",   label: "Non-official only",  hint: "Exclude any 'Official' / 'Mall' shop — useful for reseller / grey-market pricing." },
+  { value: "specific_shops",      label: "Specific shop(s)",   hint: "Match listings whose shopName contains one of the names you list below. Case-insensitive, comma-separated." },
 ];
 
 const inputCls =
@@ -43,6 +44,7 @@ export default function CompetitorAnalysisPage() {
     { brand: "", flavour: "", volume: "", type: "" },
   ]);
   const [officialMode, setOfficialMode] = useState<EcomJobConfig["official_store_filter"]>("all");
+  const [specificShops, setSpecificShops] = useState<string>("");   // comma-separated when officialMode='specific_shops'
   const [maxPerProduct, setMaxPerProduct] = useState(50);
   const [apifyKey,     setApifyKey]     = useState("");
 
@@ -57,8 +59,13 @@ export default function CompetitorAnalysisPage() {
   // Export to Excel state
   const [exportBrand,    setExportBrand]    = useState<string>("");   // "" = all brands
   const [exportPlatform, setExportPlatform] = useState<string>("");   // "" = all platforms
+  const [exportLatestOnly, setExportLatestOnly] = useState<boolean>(true);   // default ON — avoids legacy contamination
   const [exporting,      setExporting]      = useState(false);
   const [exportMsg,      setExportMsg]      = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Clear-listings state
+  const [clearing, setClearing] = useState(false);
+  const [clearMsg, setClearMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const ecomJobs = useMemo(() => jobs.filter((j) => j.job_type === "Ecom Listings"), [jobs]);
 
@@ -88,6 +95,7 @@ export default function CompetitorAnalysisPage() {
     setPlatforms(["Shopee"]);
     setProducts([{ brand: "", flavour: "", volume: "", type: "" }]);
     setOfficialMode("all");
+    setSpecificShops("");
     setMaxPerProduct(50);
     setApifyKey("");
     setFeedback(null);
@@ -123,18 +131,23 @@ export default function CompetitorAnalysisPage() {
       errs.push("Add at least one product — fill in a brand (flavour is optional).");
     if (maxPerProduct < 10 || maxPerProduct > 200)
       errs.push("Max listings per product must be between 10 and 200.");
+    if (officialMode === "specific_shops" &&
+        specificShops.split(",").map((s) => s.trim()).filter(Boolean).length === 0)
+      errs.push("Add at least one shop name when 'Specific shop(s)' is selected.");
     return errs;
-  }, [activeProjectId, platforms, cleanProducts, maxPerProduct]);
+  }, [activeProjectId, platforms, cleanProducts, maxPerProduct, officialMode, specificShops]);
 
   async function queueJob() {
     if (validationErrors.length || !activeProjectId) return;
     setQueuing(true);
     setFeedback(null);
     try {
+      const shopList = specificShops.split(",").map((s) => s.trim()).filter(Boolean);
       const config: EcomJobConfig = {
         platforms,
         products: cleanProducts,
         official_store_filter: officialMode,
+        ...(officialMode === "specific_shops" ? { specific_shops: shopList } : {}),
         max_listings_per_product: maxPerProduct,
       };
       // First brand tags the job row for at-a-glance identification in Recent Jobs.
@@ -187,6 +200,32 @@ export default function CompetitorAnalysisPage() {
     if (previewOpen) loadPreview();
   }, [previewOpen, loadPreview]);
 
+  // ── Clear listings ─────────────────────────────────────────────────────────
+
+  async function clearListings() {
+    if (!activeProjectId) return;
+    if (!confirm(
+      "Delete all ecom_listings rows for this project? " +
+      "Scrape jobs in the Recent Jobs panel stay; only the captured rows are wiped. " +
+      "Re-run a scrape to repopulate."
+    )) return;
+    setClearing(true);
+    setClearMsg(null);
+    try {
+      const res = await fetch(`/api/ecom-listings?project_id=${encodeURIComponent(activeProjectId)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+      setClearMsg({ ok: true, text: `Deleted ${(data as { deleted?: number }).deleted ?? 0} listing(s). Refresh the preview to confirm.` });
+      setPreviewRows(null);
+    } catch (e) {
+      setClearMsg({ ok: false, text: e instanceof Error ? e.message : "Failed to clear listings." });
+    } finally {
+      setClearing(false);
+    }
+  }
+
   // ── Export to Excel ─────────────────────────────────────────────────────────
 
   async function runExport() {
@@ -194,6 +233,12 @@ export default function CompetitorAnalysisPage() {
     setExporting(true);
     setExportMsg(null);
     try {
+      // "Latest job only" pins the export to the most recent completed Ecom
+      // Listings job, so legacy contaminated rows from older scrapes don't
+      // leak into the workbook.
+      const latestJobId = exportLatestOnly
+        ? (ecomJobs.find((j) => j.status === "COMPLETED")?.job_id ?? null)
+        : null;
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -202,6 +247,7 @@ export default function CompetitorAnalysisPage() {
           project_id:      activeProjectId,
           brand_filter:    exportBrand    || null,
           platform_filter: exportPlatform || null,
+          job_id:          latestJobId,
         }),
       });
       if (!res.ok) {
@@ -390,10 +436,10 @@ export default function CompetitorAnalysisPage() {
           </div>
         </div>
 
-        {/* Official store filter */}
+        {/* Shop filter */}
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">Official store filter</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <p className="text-xs text-muted-foreground">Shop filter</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             {OFFICIAL_FILTERS.map((f) => {
               const active = officialMode === f.value;
               return (
@@ -415,6 +461,20 @@ export default function CompetitorAnalysisPage() {
               );
             })}
           </div>
+          {officialMode === "specific_shops" && (
+            <div className="pt-1">
+              <input
+                type="text"
+                value={specificShops}
+                onChange={(e) => setSpecificShops(e.target.value)}
+                placeholder="e.g. Nescafe Official Store, Tokopedia Nescafe, Indomie Official"
+                className={`w-full ${inputCls}`}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Comma-separated. Case-insensitive substring match against each listing's shop name.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Max per product + Apify */}
@@ -526,6 +586,20 @@ export default function CompetitorAnalysisPage() {
             </select>
           </div>
         </div>
+
+        {/* Source toggle — defaults to latest job so legacy data doesn't pollute */}
+        <label className="flex items-center gap-2 text-sm cursor-pointer text-foreground">
+          <input
+            type="checkbox"
+            checked={exportLatestOnly}
+            onChange={(e) => setExportLatestOnly(e.target.checked)}
+            className="accent-primary"
+          />
+          <span>
+            <span className="font-medium">Latest completed job only</span>
+            <span className="text-muted-foreground"> — uncheck to include every captured listing across all scrapes</span>
+          </span>
+        </label>
 
         {exportMsg && (
           <div
@@ -682,6 +756,16 @@ export default function CompetitorAnalysisPage() {
             )}
             <button
               type="button"
+              onClick={clearListings}
+              disabled={clearing}
+              className="inline-flex items-center gap-1.5 text-xs text-red-400/80 hover:text-red-400 transition-colors"
+              title="Delete every ecom_listings row in this project (jobs are kept)"
+            >
+              {clearing ? <CatSpinner size={12} /> : <Trash2 className="w-3.5 h-3.5" />}
+              Clear all
+            </button>
+            <button
+              type="button"
               onClick={() => setPreviewOpen((o) => !o)}
               className="text-xs underline text-muted-foreground hover:text-foreground"
             >
@@ -689,6 +773,19 @@ export default function CompetitorAnalysisPage() {
             </button>
           </div>
         </div>
+
+        {clearMsg && (
+          <div
+            className="text-sm px-3 py-2 rounded-lg border"
+            style={{
+              borderColor: clearMsg.ok ? "rgba(52,211,153,0.4)" : "rgba(248,113,113,0.4)",
+              background:  clearMsg.ok ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
+              color:       clearMsg.ok ? "#34d399" : "#f87171",
+            }}
+          >
+            {clearMsg.text}
+          </div>
+        )}
 
         {previewOpen && (
           previewLoading ? (

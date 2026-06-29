@@ -14,8 +14,11 @@ export interface EcomProductTarget {
 export interface EcomJobConfig {
   platforms: ("Shopee" | "Tokopedia")[];
   products: EcomProductTarget[];                 // new — one search per product
-  official_store_filter: "all" | "official_only" | "non_official_only";
-  max_listings_per_product: number;              // cap per (brand, flavour), default 50
+  // 'specific_shops' uses the specific_shops[] list (case-insensitive
+  // substring match against the listing's shop name).
+  official_store_filter: "all" | "official_only" | "non_official_only" | "specific_shops";
+  specific_shops?: string[];                     // only used when filter === 'specific_shops'
+  max_listings_per_product: number;              // hard cap per product — fewer is fine, precision > volume
 
   // ── legacy fields (still readable for jobs queued before the redesign) ──
   search_mode?: "keyword" | "shop";

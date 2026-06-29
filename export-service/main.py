@@ -132,6 +132,7 @@ class EcomRequest(BaseModel):
     project_id: str
     brand_filter: str | None = None      # case-insensitive ilike match; None = all brands
     platform_filter: str | None = None   # "Shopee" | "Tokopedia" | None for all
+    job_id: str | None = None            # filter to a single scrape job's listings; None = all jobs
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -215,6 +216,7 @@ def export_ecom(req: EcomRequest):
         project_id=req.project_id,
         brand_filter=req.brand_filter,
         platform_filter=req.platform_filter,
+        job_id=req.job_id,
     )
     if not rows:
         raise HTTPException(

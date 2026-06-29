@@ -597,13 +597,17 @@ def _is_brand_official_shop(shop_name: str, brand: str) -> bool:
     return bool(_tokens(brand))
 
 
-def _apply_official_filter(items: list, mode: str, platform: str, brand: str) -> list:
+def _apply_official_filter(items: list, mode: str, platform: str, brand: str,
+                           specific_shops=None) -> list:
     """
     mode='all'                — no filter.
     mode='official_only'      — shop must be the BRAND's official store
                                 (shopName has all brand tokens + 'official'/'mall').
     mode='non_official_only'  — exclude ANY shop with 'official'/'mall' in the name,
-                                regardless of brand (we don't want Mall noise here).
+                                regardless of brand.
+    mode='specific_shops'     — keep only listings whose shopName matches one of
+                                the user-supplied shop names (case-insensitive
+                                substring; multiple shops are OR'd).
     """
     if mode == "all" or not mode:
         return items
@@ -614,6 +618,14 @@ def _apply_official_filter(items: list, mode: str, platform: str, brand: str) ->
             sn = _shop_name_of(it).lower()
             return "official" in sn or "mall" in sn
         return [it for it in items if not _any_official(it)]
+    if mode == "specific_shops":
+        wanted = [s.strip().lower() for s in (specific_shops or []) if s and s.strip()]
+        if not wanted:
+            return []   # user picked 'specific_shops' but listed none — reject all
+        def _shop_match(it):
+            sn = _shop_name_of(it).lower()
+            return any(w in sn for w in wanted)
+        return [it for it in items if _shop_match(it)]
     return items
 
 def _tokens(s: str) -> list:
@@ -684,6 +696,7 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
     if not platforms:
         raise ValueError("ecom_config.platforms must include 'Shopee' and/or 'Tokopedia'")
     of_filter = (cfg.get("official_store_filter") or "all").lower()
+    specific_shops = [str(s).strip() for s in (cfg.get("specific_shops") or []) if str(s).strip()]
     cap_per   = max(10, min(int(cfg.get("max_listings_per_product") or 50), 200))
 
     # ── Build the product list, accepting both the new shape and the legacy ──
@@ -750,10 +763,9 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                     continue
                 valid.append(it)
 
-            # Then apply the user's official-store filter on the survivors.
-            # Brand-strict: official_only requires shopName to contain the
-            # brand tokens AND 'official'/'mall' — see _is_brand_official_shop.
-            filtered = _apply_official_filter(valid, of_filter, platform, brand)
+            # Then apply the user's shop filter on the survivors. official_only
+            # is brand-strict; specific_shops matches the user's shopName list.
+            filtered = _apply_official_filter(valid, of_filter, platform, brand, specific_shops)
             filtered_count += len(filtered)
 
             # Pre-compute user-spec overlays so the per-row work is cheap.
@@ -787,8 +799,10 @@ def ecom_run_listings(pid: str, jid: str, cfg: dict, apify_token: str) -> tuple:
                 reason = (f"{platform}: actor returned {raw_count} item(s) but ALL failed the "
                           f"title-validation (brand or flavour tokens not in title)")
             elif of_filter != "all" and filtered_count == 0:
+                hint = ("try 'all' or check the shop name(s)" if of_filter == "specific_shops"
+                        else "try 'all' to keep them")
                 reason = (f"{platform}: {raw_count - title_dropped} valid item(s) but all rejected "
-                          f"by official_store_filter='{of_filter}' — try 'all'")
+                          f"by official_store_filter='{of_filter}' — {hint}")
             else:
                 reason = f"{platform}: {raw_count} returned, mapper produced 0 rows (see Railway logs)"
             notes.append(reason)

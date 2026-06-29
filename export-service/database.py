@@ -172,9 +172,12 @@ def get_ecom_listings(
     project_id: str,
     brand_filter: str | None = None,
     platform_filter: str | None = None,
+    job_id: str | None = None,
 ) -> list[dict]:
-    """Fetch ecom_listings rows for a project, optionally narrowed by brand
-    or platform. Brand match is case-insensitive."""
+    """Fetch ecom_listings rows for a project, optionally narrowed by brand,
+    platform, or the originating scrape job (the job_id filter is the easy way
+    to exclude legacy listings from a contaminated table — pass the latest
+    completed Ecom Listings job_id to get just that run's data)."""
     q = (
         supabase.table("ecom_listings")
         .select("*")
@@ -184,6 +187,8 @@ def get_ecom_listings(
         q = q.eq("platform", platform_filter)
     if brand_filter:
         q = q.ilike("brand_name", brand_filter)
+    if job_id:
+        q = q.eq("job_id", job_id)
     return q.order("scraped_at", desc=True).execute().data or []
 
 
