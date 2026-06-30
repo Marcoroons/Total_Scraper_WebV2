@@ -407,10 +407,36 @@ def _ecom_safe_float(x):
     except (TypeError, ValueError): return None
 
 def _ecom_safe_int(x):
+    """Parse to int. Handles: int/float, '1234', '1.234' (Indonesian thousand
+    separator), '1.2K', '1.2 k', '500+', '10rb' (Indonesian 'ribu' = thousand),
+    '2.5M'. Returns None for unparseable / empty / negative values."""
     try:
         if x is None or x == "": return None
-        return int(float(x))
-    except (TypeError, ValueError): return None
+        if isinstance(x, bool): return int(x)
+        if isinstance(x, (int, float)): return int(x) if x >= 0 else None
+        s = str(x).strip().lower().replace("+", "")
+        if not s: return None
+        # Distinguish '1.5' (decimal) from '1.500' (Indonesian thousand-dot).
+        # Same heuristic the price parser uses: a single dot followed by
+        # exactly 3 digits is a thousands separator.
+        if "." in s and "," not in s:
+            head, _, tail = s.partition(".")
+            if tail.isdigit() and len(tail) == 3:
+                s = head + tail
+        s = s.replace(",", ".")
+        m = re.match(r"^([0-9]*\.?[0-9]+)\s*([kmrb]+)?$", s)
+        if not m:
+            s2 = s.replace(".", "")
+            return int(s2) if s2.isdigit() else None
+        num = float(m.group(1))
+        suf = m.group(2) or ""
+        if suf in ("k", "rb"):
+            num *= 1000
+        elif suf == "m":
+            num *= 1_000_000
+        return int(num) if num >= 0 else None
+    except (TypeError, ValueError):
+        return None
 
 def _ecom_first_present(*candidates):
     """Return the first candidate that is not None / not empty-string.
@@ -528,12 +554,17 @@ def _shopee_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
         "description": str(raw.get("description") or raw.get("desc") or "")[:8000] or None,
         "rating":     _ecom_safe_float(_ecom_first_present(raw.get("rating"), raw.get("ratingStar"), raw.get("itemRating"))),
         # gio21/shopee-scraper returns 'historicalSoldEstimated'; older / other
-        # actors use 'historicalSold' / 'sold' / 'soldCount'. Try all of them
-        # via _ecom_first_present so a legit 0 (no recorded sales yet) isn't
-        # silently dropped by Python's `or` short-circuit.
+        # actor versions use 'historicalSold' / 'sold' / 'soldCount' / 'salesCount'
+        # / 'monthlySold' etc. Try a broad set, _ecom_first_present preserves a
+        # legit 0. If every sales field is null/missing, fall back to reviewCount
+        # as a known-imperfect popularity proxy (reviewers ⊂ buyers, so it's a
+        # conservative lower bound; flagged separately in raw_payload so the
+        # exporter can label it).
         "sold_count": _ecom_safe_int(_ecom_first_present(
             raw.get("historicalSoldEstimated"), raw.get("historicalSold"),
-            raw.get("sold"), raw.get("soldCount"),
+            raw.get("sold"), raw.get("soldCount"), raw.get("salesCount"),
+            raw.get("monthlySold"), raw.get("totalSold"), raw.get("lifetimeSold"),
+            raw.get("num_sold"), raw.get("numSold"),
         )),
         "url":        raw.get("itemUrl") or raw.get("url"),
         "parse_confidence": "raw",

@@ -208,7 +208,7 @@ export default function CompetitorAnalysisPage() {
       const supabase = createClient();
       const { data, error } = await supabase
         .from("ecom_listings")
-        .select("listing_id, platform, brand_name, shop_name, is_official_store, title, listing_price_idr, sold_count, rating, url, scraped_at")
+        .select("listing_id, platform, brand_name, shop_name, is_official_store, title, listing_price_idr, sold_count, rating, url, scraped_at, raw_payload")
         .eq("project_id", activeProjectId)
         .order("scraped_at", { ascending: false })
         .limit(50);
@@ -221,6 +221,11 @@ export default function CompetitorAnalysisPage() {
       setPreviewLoading(false);
     }
   }, [activeProjectId]);
+
+  // "View raw" modal — lets the user inspect what the actor actually returned
+  // for any listing (so we can diagnose missing sold_count / etc. without
+  // round-tripping through Supabase SQL editor).
+  const [rawViewer, setRawViewer] = useState<ListingPreviewRow | null>(null);
 
   useEffect(() => {
     if (previewOpen) loadPreview();
@@ -984,7 +989,8 @@ export default function CompetitorAnalysisPage() {
                     <th className="text-right py-2 pr-3">Price (IDR)</th>
                     <th className="text-right py-2 pr-3">Sold</th>
                     <th className="text-right py-2 pr-3">Rating</th>
-                    <th className="text-left py-2">Scraped</th>
+                    <th className="text-left py-2 pr-3">Scraped</th>
+                    <th className="text-left py-2">Raw</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1022,10 +1028,24 @@ export default function CompetitorAnalysisPage() {
                       <td className="py-2 pr-3 text-right text-muted-foreground">
                         {r.rating != null ? Number(r.rating).toFixed(2) : "—"}
                       </td>
-                      <td className="py-2 text-muted-foreground whitespace-nowrap">
+                      <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">
                         {new Date(r.scraped_at).toLocaleString("en-SG", {
                           day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
                         })}
+                      </td>
+                      <td className="py-2">
+                        {r.raw_payload ? (
+                          <button
+                            type="button"
+                            onClick={() => setRawViewer(r)}
+                            className="text-[11px] underline text-muted-foreground hover:text-foreground"
+                            title="Inspect the actor's raw response for this listing"
+                          >
+                            view
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1041,6 +1061,56 @@ export default function CompetitorAnalysisPage() {
           </p>
         )}
       </section>
+
+      {/* Raw-payload viewer — opens when the user clicks "view" on a listing row.
+          Shows the actor's complete response so you can spot which fields are
+          (or aren't) populated. Highlights the sales-related fields explicitly. */}
+      {rawViewer && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => setRawViewer(null)}
+        >
+          <div
+            className="bg-card border border-border rounded-2xl max-w-3xl w-full max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+              <div className="min-w-0">
+                <p className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">Raw actor response</p>
+                <p className="text-sm font-medium text-foreground truncate" title={rawViewer.title}>{rawViewer.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRawViewer(null)}
+                className="text-muted-foreground hover:text-foreground p-1.5"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-5 py-3 border-b border-border text-[11px] text-muted-foreground">
+              {(() => {
+                const rp = (rawViewer.raw_payload ?? {}) as Record<string, unknown>;
+                const soldFields = ["historicalSoldEstimated", "historicalSold", "sold", "soldCount", "salesCount", "monthlySold", "totalSold", "lifetimeSold"];
+                const reviewFields = ["reviewCount", "numReviews", "rating_count", "ratingCount", "cmt_count"];
+                const found = soldFields.filter((k) => rp[k] != null);
+                const reviews = reviewFields.filter((k) => rp[k] != null);
+                return (
+                  <div className="space-y-1">
+                    <div><span className="text-foreground">Sales fields present:</span> {found.length ? found.map((k) => `${k}=${JSON.stringify(rp[k])}`).join(", ") : "(none — actor returned no sales estimate)"}</div>
+                    <div><span className="text-foreground">Review fields present:</span> {reviews.length ? reviews.map((k) => `${k}=${JSON.stringify(rp[k])}`).join(", ") : "(none)"}</div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="overflow-auto flex-1 px-5 py-4">
+              <pre className="text-[11px] leading-relaxed text-foreground/90 whitespace-pre-wrap break-all">
+{JSON.stringify(rawViewer.raw_payload, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1059,4 +1129,5 @@ interface ListingPreviewRow {
   rating: number | null;
   url: string | null;
   scraped_at: string;
+  raw_payload?: Record<string, unknown> | null;
 }
