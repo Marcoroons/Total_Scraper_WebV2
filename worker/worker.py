@@ -1780,15 +1780,18 @@ def process_job(job):
 
         elif jtype == "Specific URLs (Video Stats)":
             if is_yt:
-                # YouTube URL stats: one video, type inferred from /shorts/ in
-                # the URL so we cap the unwanted type at 0 (no infinite-shorts
-                # bill if a long-form URL is passed, no infinite-videos if a
-                # Short URL is passed). Always explicit zeros — see _yt_caps.
-                is_short_url = "/shorts/" in str(target)
-                fmt_for_caps = "Shorts Only" if is_short_url else "Videos Only"
+                # YouTube URL stats: exactly one video URL in startUrls, so the
+                # actor scrapes that one source — the per-type caps just need
+                # to NOT block. Use 1/1/0 (allow either Video or Short, no
+                # streams) instead of routing through _yt_caps (correct for
+                # channel-feed sampling but over-conservative here: a
+                # youtu.be/... short-link the actor classifies as a Short
+                # would be blocked by maxResultsShorts:0). Streams stay 0.
+                # Still explicit integers — never blanks (the actor's
+                # blank-means-INFINITE bug bites at any scale).
                 run_input = {
                     "startUrls": [{"url": target}],
-                    **_yt_caps(fmt_for_caps, 1),
+                    "maxResults": 1, "maxResultsShorts": 1, "maxResultStreams": 0,
                     "proxyConfiguration": {"useApifyProxy": True},
                     **_yt_subtitle_input(),
                 }
