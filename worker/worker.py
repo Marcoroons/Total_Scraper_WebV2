@@ -1318,6 +1318,127 @@ def _yt_safe_int(v) -> int:
         return 0
 
 
+def _yt_parse_duration(v) -> int:
+    """
+    Parse a YouTube duration → seconds (int). The actor returns strings:
+      "00:03:17"  → 197   (HH:MM:SS)
+      "29:54"     → 1794  (MM:SS)
+      "1:23:37"   → 5017  (H:MM:SS)
+      "0:45"      → 45    (M:SS)
+    Also accepts a plain int (already seconds) for forward-compat.
+    Returns 0 on anything unparseable so the Shorts heuristic (duration ≤ 61s)
+    falls back to URL/type signals rather than misclassifying.
+    """
+    if v in (None, ""):
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    if not s:
+        return 0
+    parts = s.split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return 0
+    # Walk parts right-to-left: seconds, minutes, hours.
+    secs = 0
+    for i, n in enumerate(reversed(nums)):
+        secs += n * (60 ** i)
+    return secs
+
+
+def _yt_extract_transcript(subs) -> str:
+    """
+    Pull plain text out of the subtitles array. Schema:
+      [{ "srtUrl": "...", "type": "auto_generated"|"user_generated",
+         "language": "en", "srt": "1\\n00:00..\\nline\\n\\n2\\n..." }]
+    Prefer English (auto_generated or user_generated); fall back to the first
+    entry. We strip the SRT timing lines and line numbers so the stored value
+    is just the spoken text — feeds the deterministic claim/theme tagger.
+    Returns "" if no subtitles or all entries had empty `srt`.
+    """
+    if not subs:
+        return ""
+    if isinstance(subs, str):
+        return subs   # forward-compat: actor sometimes returns a flat string
+    if not isinstance(subs, list):
+        return ""
+    chosen = None
+    for s in subs:
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("language", "")).lower().startswith("en") and s.get("srt"):
+            chosen = s
+            break
+    if chosen is None:
+        for s in subs:
+            if isinstance(s, dict) and s.get("srt"):
+                chosen = s
+                break
+    if chosen is None:
+        return ""
+    srt = str(chosen.get("srt") or "")
+    if not srt:
+        return ""
+    # Strip SRT block numbers and timing lines; keep the spoken text.
+    import re as _re
+    lines = []
+    for raw in srt.splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        if ln.isdigit():               # block index
+            continue
+        if "-->" in ln:                # timing line
+            continue
+        lines.append(ln)
+    # Dedupe consecutive duplicates (SRT often repeats lines across blocks).
+    out: list = []
+    for ln in lines:
+        if not out or out[-1] != ln:
+            out.append(ln)
+    return " ".join(out)
+
+
+def _yt_extract_date(v) -> str:
+    """
+    Return a YYYY-MM-DD date ONLY when the actor's `date` field looks ISO.
+    The actor returns:
+      • ISO on video-page scrapes:  "2021-12-21" / "2025-01-15T12:00:00.000Z"
+      • Relative on channel-listings: "10 months ago" / "5 years ago" / "12 years ago"
+    Relative strings can't be turned into a real date without knowing the
+    scrape moment AND the actor's rounding (months ≠ 30 days), so we
+    deliberately drop them — the export keeps undated rows rather than
+    inventing a wrong post_date.
+    """
+    if v in (None, ""):
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    # ISO date or ISO datetime — first 10 chars must be YYYY-MM-DD.
+    import re as _re
+    if _re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return s[:10]
+    return ""
+
+
+def _yt_handle_from_channel_url(url) -> str:
+    """Extract a clean handle from a channel URL: '@handle' or 'UCxxx'."""
+    if not url:
+        return ""
+    import re as _re
+    s = str(url)
+    m = _re.search(r"youtube\.com/@([^/?#]+)", s)
+    if m:
+        return m.group(1)
+    m = _re.search(r"youtube\.com/(?:channel|c|user)/([^/?#]+)", s)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def _yt_caps(format_filter: str, n: int) -> dict:
     """
     Build the explicit-zeros cap dict for `streamers/youtube-scraper`. CRITICAL:
@@ -1338,9 +1459,12 @@ def _yt_content_type(item: dict) -> str:
     """
     Return 'Short' if the item is a YouTube Short, else 'Video'. Signals
     (priority order):
-      1. URL contains '/shorts/'
-      2. Actor's explicit type/videoType field
-      3. duration < 61 seconds
+      1. URL contains '/shorts/' (most reliable — Shorts have a distinct path)
+      2. Actor's `type` field (Shorts schema sets type="shorts")
+      3. `fromChannelListPage` == "shorts" (set when scraping a channel's
+         /shorts page)
+      4. duration ≤ 61 seconds (regular videos can be short but rarely
+         exactly Short-format-length)
     """
     url = str(_yt_first_present(item, "url", "videoUrl", "watchUrl", "link") or "")
     if "/shorts/" in url:
@@ -1350,7 +1474,10 @@ def _yt_content_type(item: dict) -> str:
         return "Short"
     if t in ("video", "longform", "regular"):
         return "Video"
-    dur = _yt_safe_int(_yt_first_present(item, "duration", "durationSeconds", "lengthSeconds"))
+    src = str(item.get("fromChannelListPage") or "").lower()
+    if "short" in src:
+        return "Short"
+    dur = _yt_parse_duration(_yt_first_present(item, "duration", "durationSeconds", "lengthSeconds"))
     if 0 < dur <= 61:
         return "Short"
     return "Video"
@@ -1389,29 +1516,40 @@ def _yt_extract_video_id(url: str) -> str:
 def _yt_map_video(d: dict, channel_handle: str = "") -> dict:
     """
     Map a `streamers/youtube-scraper` item to the YouTube data-table column set.
-    Uses _yt_first_present everywhere so a real 0 metric isn't dropped.
-
-    Field-name candidates here are DEFENSIVE — see the changelog entry for which
-    are confirmed vs unverified. If the actor returns a field this mapper misses
-    entirely, add it to the relevant candidate list; the explicit-zeros cap
-    behaviour is unaffected.
+    Field names confirmed against actor samples 2026-06-30 (see CLAUDE.md):
+      • URL        → `url`
+      • views      → `viewCount` (number)
+      • likes      → `likes` (number)          [missing on channel-listing scrapes]
+      • comments # → `commentsCount` (number)  [missing on channel-listing scrapes]
+      • subscribers→ `numberOfSubscribers` (number)
+      • duration   → `duration` (HH:MM:SS / MM:SS / H:MM:SS string)
+      • description→ `text` (string)
+      • subtitles  → `subtitles` ARRAY of {srt, language, type}
+                     [missing on channel-listing scrapes]
+      • hashtags   → `hashtags` (array of strings, sometimes with #)
+      • date       → `date` — ISO on video-page, RELATIVE on channel-listing
+      • channel    → `channelName` (display) + `channelUrl` + `channelUsername`
+      • video id   → `id`
+    Alternate names kept as fallbacks for forward-compat. Uses _yt_first_present
+    so a legit 0 metric isn't silently dropped.
     """
     url = str(_yt_first_present(d, "url", "videoUrl", "watchUrl", "link") or "")
     is_short = _yt_content_type(d) == "Short"
-    duration = _yt_safe_int(_yt_first_present(d, "duration", "durationSeconds", "lengthSeconds"))
-    views = _yt_safe_int(_yt_first_present(d, "viewCount", "views", "viewsCount", "numberOfViews"))
-    likes = _yt_safe_int(_yt_first_present(d, "likes", "likeCount", "numberOfLikes"))
-    cmts = _yt_safe_int(_yt_first_present(d, "commentsCount", "commentCount", "numberOfComments"))
-    subs = _yt_safe_int(_yt_first_present(d, "subscriberCount", "numberOfSubscribers",
-                                          "channelSubscribers", "subscribersCount"))
-    # Channel handle preference: explicit param (we know who we asked for) > actor field.
+    duration = _yt_parse_duration(_yt_first_present(d, "duration", "durationSeconds", "lengthSeconds"))
+    views = _yt_safe_int(_yt_first_present(d, "viewCount", "views", "viewsCount"))
+    likes = _yt_safe_int(_yt_first_present(d, "likes", "likeCount"))
+    cmts = _yt_safe_int(_yt_first_present(d, "commentsCount", "commentCount"))
+    subs = _yt_safe_int(_yt_first_present(d, "numberOfSubscribers", "subscriberCount", "subscribersCount"))
+    # Channel handle preference: explicit param (we know who we asked for) >
+    # actor's `channelUsername` (clean handle on Shorts) > parse from
+    # `channelUrl` > `channelName` (display name, possibly with spaces).
     uploader = (channel_handle.strip().lstrip("@")
-                or str(_yt_first_present(d, "channelName", "channelTitle", "author",
-                                         "uploaderName", "channelHandle") or "").lstrip("@"))
+                or str(_yt_first_present(d, "channelUsername") or "").lstrip("@")
+                or _yt_handle_from_channel_url(_yt_first_present(d, "channelUrl"))
+                or str(_yt_first_present(d, "channelName", "channelTitle", "author", "uploaderName") or "").lstrip("@"))
     title = str(_yt_first_present(d, "title", "videoTitle") or "")
-    caption = str(_yt_first_present(d, "text", "description", "videoDescription", "caption") or "")
-    transcript = str(_yt_first_present(d, "subtitles", "transcript", "captions",
-                                       "subtitleText", "subtitlesText", "autoCaption") or "")
+    caption = str(_yt_first_present(d, "text", "description", "videoDescription") or "")
+    transcript = _yt_extract_transcript(_yt_first_present(d, "subtitles", "transcript", "captions"))
     tags = _yt_first_present(d, "hashtags", "tags")
     if isinstance(tags, str):
         tags = [t.strip().lstrip("#") for t in tags.split(",") if t.strip()]
@@ -1419,8 +1557,15 @@ def _yt_map_video(d: dict, channel_handle: str = "") -> dict:
         tags = [str(t).strip().lstrip("#") for t in tags if str(t).strip()]
     else:
         tags = None
-    vid_id = (str(_yt_first_present(d, "videoId", "id") or "").strip()
+    vid_id = (str(_yt_first_present(d, "id", "videoId") or "").strip()
               or _yt_extract_video_id(url))
+    # Date: ONLY keep ISO ("2021-12-21" / "2025-01-15T12:00:00.000Z") — relative
+    # strings ("10 months ago", "5 years ago") returned on channel-listing
+    # scrapes are dropped so post_date stays a real date, not "10 months ".
+    post_date = _yt_extract_date(_yt_first_present(d, "date", "publishedAt", "uploadDate"))
+    if not post_date:
+        # Fall back to the IG/TT-shared extractor (handles Unix timestamps, etc.)
+        post_date = _extract_post_date(d)
     return {
         "url": url,
         "username": uploader,
@@ -1440,7 +1585,7 @@ def _yt_map_video(d: dict, channel_handle: str = "") -> dict:
         "caption": caption,
         "transcript": transcript,
         "hashtags": tags,
-        "post_date": _extract_post_date(d),
+        "post_date": post_date,
         "content_type": "Short" if is_short else "Video",
     }
 
@@ -2063,9 +2208,14 @@ def process_job(job):
         elif jtype == "Comments (Sentiment)":
             if is_yt:
                 # YouTube comments via `streamers/youtube-comments-scraper`.
-                # The exact max-comments key isn't confirmed (candidates seen
-                # in actor docs: maxComments / maxResults / commentsPerVideo).
-                # Send all three — the actor ignores unrecognised keys.
+                # Verified output fields (sample 2026-06-30):
+                #   comment, cid, author (with @), videoId, pageUrl,
+                #   commentsCount, replyCount, voteCount (= comment likes),
+                #   authorIsChannelOwner, hasCreatorHeart, type ("comment"),
+                #   replyToCid, title.
+                # The cap key isn't documented — send the three most likely
+                # (`maxComments`/`maxResults`/`commentsPerVideo`); the actor
+                # ignores keys it doesn't recognise.
                 # comment_text MUST map to the same `comment_text` column the
                 # NLP engine reads so YouTube comments classify through the
                 # existing Indonesian/English nlp_engine with no special-casing.
@@ -2076,17 +2226,27 @@ def process_job(job):
                     "commentsPerVideo":  limit,
                     "proxyConfiguration": {"useApifyProxy": True},
                 }
-                data = (call_apify(actors["comments"], run_input, apikey) or [])[:limit]
+                data = call_apify(actors["comments"], run_input, apikey) or []
                 payload = []
                 for d in data:
-                    text = _yt_first_present(d, "text", "comment", "content", "commentText")
-                    author = _yt_first_present(d, "author", "authorName", "commentAuthor",
-                                               "channelName", "username", "user")
+                    text = _yt_first_present(d, "comment", "text", "content", "commentText")
+                    author = _yt_first_present(d, "author", "authorName", "channelName", "username")
+                    # Top-level replies only: skip nested replies if the actor returns them.
+                    # `replyToCid` is set for replies; leave it filtered out so the comment
+                    # count in the export matches what's shown on the video page top-level.
+                    if d.get("replyToCid"):
+                        continue
                     payload.append({
-                        "video_url":          target,
+                        # `pageUrl` is per-row in the response — use it so multi-URL
+                        # comment scrapes don't all collapse onto the job's `target`.
+                        "video_url":          str(_yt_first_present(d, "pageUrl") or target),
                         "influencer_username": kol,
                         "commenter_username":  str(author or "").lstrip("@") or "unknown",
                         "comment_text":        str(text or ""),
+                        # voteCount = upvotes on the comment itself. youtube_comments
+                        # has a `likes` column for it; the IG/TT tables don't, so this
+                        # only flows when is_yt.
+                        "likes":               _yt_safe_int(d.get("voteCount")),
                     })
             elif is_ig:
                 data = call_apify(actors["comments"],{"directUrls":[target],"resultsLimit":limit,"includeReplies":False},apikey)[:limit]
@@ -2097,7 +2257,22 @@ def process_job(job):
                 payload = [{"video_url":target,"influencer_username":kol,
                             "commenter_username":d.get("uniqueId") or d.get("author"),
                             "comment_text":d.get("text")} for d in data]
-            db.upsert_comments(supabase, plat, payload)
+            # YT: cap to `limit` AFTER reply-filter so we don't return half-empty.
+            if is_yt and limit:
+                payload = payload[:limit]
+            try:
+                db.upsert_comments(supabase, plat, payload)
+            except Exception as db_err:
+                err_str = str(db_err).lower()
+                if is_yt and "likes" in err_str:
+                    # youtube_comments migration not run yet — strip the YT-only
+                    # `likes` column and retry. IG/TT branches never set this.
+                    print(f"   ⚠️ DB rejected youtube_comments.likes — retrying without (run sql/youtube_platform.sql)")
+                    for row in payload:
+                        row.pop("likes", None)
+                    db.upsert_comments(supabase, plat, payload)
+                else:
+                    raise
 
         elif jtype == "Competitor Ads (Meta)":
             fetch_meta_ads(pid, target)
