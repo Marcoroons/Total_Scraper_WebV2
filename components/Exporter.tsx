@@ -215,7 +215,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   const availableCalc = useMemo(() => {
     const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
     const platformSet = new Set<string>();
-    for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok"] ?? [])) platformSet.add(m);
+    for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok" | "YouTube"] ?? [])) platformSet.add(m);
     const fnSet: Set<string> = fnFilter === "all"
       ? new Set(SCRAPE_FUNCTIONS.flatMap((f) => FUNCTION_CALC_METRICS[f.key]))
       : new Set(FUNCTION_CALC_METRICS[fnFilter]);

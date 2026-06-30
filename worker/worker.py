@@ -123,6 +123,18 @@ def call_apify(actor, run_input, token=None):
 
 IG = {"video_stats":"apify/instagram-scraper","profile":"apify/instagram-scraper","comments":"apify/instagram-comment-scraper","hashtag":"apify/instagram-hashtag-scraper"}
 TT = {"video_stats":"clockworks/tiktok-scraper","profile":"clockworks/tiktok-scraper","comments":"clockworks/tiktok-comments-scraper","hashtag":"clockworks/tiktok-scraper"}
+# YouTube as a first-class platform — Video Stats / Profile Audit / Comments only.
+# The main `streamers/youtube-scraper` returns videos AND shorts in ONE run via
+# per-type caps (`maxResults` / `maxResultsShorts` / `maxResultStreams`); leaving
+# any of those blank means INFINITE (documented actor bug), so the worker MUST
+# always send explicit integer values for all three on every call (see
+# `_yt_caps`). `streamers/youtube-shorts-scraper` is reserved as an optional
+# fallback for channel-shorts coverage and is NOT currently wired in. NO
+# "hashtag" key — YouTube has no hashtag-feed flow (the UI hides the option).
+YT = {"video_stats":"streamers/youtube-scraper",
+      "shorts":"streamers/youtube-shorts-scraper",
+      "profile":"streamers/youtube-scraper",
+      "comments":"streamers/youtube-comments-scraper"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EMAIL DISPATCHER
@@ -1273,6 +1285,194 @@ def _call_ig_profile(url: str, fmt: str, limit: int, apikey: str,
         return date_filtered if has_range else date_filtered[:limit]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# YOUTUBE HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+# Why a defensive _yt_first_present helper instead of `.get("viewCount") or
+# d.get("views")`: a legit zero on `historicalSoldEstimated` once silently fell
+# through to None in the ecom path (commit 4301eec) — same trap applies here.
+# Use first-PRESENT (None-aware) so a real 0 view count survives.
+def _yt_first_present(d: dict, *keys):
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return None
+
+
+def _yt_safe_int(v) -> int:
+    """Coerce YouTube actor values to int. Handles '1.2K', '500+', None, 0."""
+    if v in (None, ""):
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace(",", "").replace("+", "")
+    try:
+        if s.endswith(("K", "k")):
+            return int(float(s[:-1]) * 1000)
+        if s.endswith(("M", "m")):
+            return int(float(s[:-1]) * 1_000_000)
+        if s.endswith(("B", "b")):
+            return int(float(s[:-1]) * 1_000_000_000)
+        return int(float(s))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _yt_caps(format_filter: str, n: int) -> dict:
+    """
+    Build the explicit-zeros cap dict for `streamers/youtube-scraper`. CRITICAL:
+    leaving any of the three blank means INFINITE (documented actor bug) — a
+    Videos-only scrape that omits maxResultsShorts will silently pull unlimited
+    shorts and burn the Apify bill. Always pass explicit integers; zeros for the
+    types we don't want this run.
+    """
+    if format_filter == "Shorts Only":
+        return {"maxResults": 0, "maxResultsShorts": n, "maxResultStreams": 0}
+    if format_filter == "Videos Only":
+        return {"maxResults": n, "maxResultsShorts": 0, "maxResultStreams": 0}
+    # "All Formats" or empty → both, no streams
+    return {"maxResults": n, "maxResultsShorts": n, "maxResultStreams": 0}
+
+
+def _yt_content_type(item: dict) -> str:
+    """
+    Return 'Short' if the item is a YouTube Short, else 'Video'. Signals
+    (priority order):
+      1. URL contains '/shorts/'
+      2. Actor's explicit type/videoType field
+      3. duration < 61 seconds
+    """
+    url = str(_yt_first_present(item, "url", "videoUrl", "watchUrl", "link") or "")
+    if "/shorts/" in url:
+        return "Short"
+    t = str(_yt_first_present(item, "type", "videoType", "kind") or "").lower()
+    if "short" in t:
+        return "Short"
+    if t in ("video", "longform", "regular"):
+        return "Video"
+    dur = _yt_safe_int(_yt_first_present(item, "duration", "durationSeconds", "lengthSeconds"))
+    if 0 < dur <= 61:
+        return "Short"
+    return "Video"
+
+
+def _filter_yt_content(items: list, format_filter: str) -> list:
+    """
+    Final safety net for YouTube content-type filtering. The actor's per-type
+    caps usually do the work, but if it returns a mixed bag for "Videos Only" or
+    "Shorts Only", this filter trims to the requested type. "All Formats" keeps
+    both. Mirrors the IG content-filter pattern; KEEPS items whose type we
+    couldn't classify rather than dropping them.
+    """
+    if not format_filter or format_filter == "All Formats":
+        return items
+    want = "Short" if format_filter == "Shorts Only" else "Video"
+    return [d for d in items if _yt_content_type(d) == want]
+
+
+def _yt_extract_video_id(url: str) -> str:
+    """Pull the 11-char video id from any YouTube URL form."""
+    import re as _re
+    if not url:
+        return ""
+    s = str(url)
+    for pat in (r"/shorts/([A-Za-z0-9_-]{11})",
+                r"watch\?v=([A-Za-z0-9_-]{11})",
+                r"youtu\.be/([A-Za-z0-9_-]{11})",
+                r"/embed/([A-Za-z0-9_-]{11})"):
+        m = _re.search(pat, s)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _yt_map_video(d: dict, channel_handle: str = "") -> dict:
+    """
+    Map a `streamers/youtube-scraper` item to the YouTube data-table column set.
+    Uses _yt_first_present everywhere so a real 0 metric isn't dropped.
+
+    Field-name candidates here are DEFENSIVE — see the changelog entry for which
+    are confirmed vs unverified. If the actor returns a field this mapper misses
+    entirely, add it to the relevant candidate list; the explicit-zeros cap
+    behaviour is unaffected.
+    """
+    url = str(_yt_first_present(d, "url", "videoUrl", "watchUrl", "link") or "")
+    is_short = _yt_content_type(d) == "Short"
+    duration = _yt_safe_int(_yt_first_present(d, "duration", "durationSeconds", "lengthSeconds"))
+    views = _yt_safe_int(_yt_first_present(d, "viewCount", "views", "viewsCount", "numberOfViews"))
+    likes = _yt_safe_int(_yt_first_present(d, "likes", "likeCount", "numberOfLikes"))
+    cmts = _yt_safe_int(_yt_first_present(d, "commentsCount", "commentCount", "numberOfComments"))
+    subs = _yt_safe_int(_yt_first_present(d, "subscriberCount", "numberOfSubscribers",
+                                          "channelSubscribers", "subscribersCount"))
+    # Channel handle preference: explicit param (we know who we asked for) > actor field.
+    uploader = (channel_handle.strip().lstrip("@")
+                or str(_yt_first_present(d, "channelName", "channelTitle", "author",
+                                         "uploaderName", "channelHandle") or "").lstrip("@"))
+    title = str(_yt_first_present(d, "title", "videoTitle") or "")
+    caption = str(_yt_first_present(d, "text", "description", "videoDescription", "caption") or "")
+    transcript = str(_yt_first_present(d, "subtitles", "transcript", "captions",
+                                       "subtitleText", "subtitlesText", "autoCaption") or "")
+    tags = _yt_first_present(d, "hashtags", "tags")
+    if isinstance(tags, str):
+        tags = [t.strip().lstrip("#") for t in tags.split(",") if t.strip()]
+    elif isinstance(tags, list):
+        tags = [str(t).strip().lstrip("#") for t in tags if str(t).strip()]
+    else:
+        tags = None
+    vid_id = (str(_yt_first_present(d, "videoId", "id") or "").strip()
+              or _yt_extract_video_id(url))
+    return {
+        "url": url,
+        "username": uploader,
+        "play_count": views,             # YouTube has no plays/views distinction — both = views
+        "view_count": views,
+        "likes": likes,
+        "comments": cmts,
+        # YouTube actors don't expose share counts. Leave None so the export
+        # can render blank instead of a misleading 0.
+        "shares": None,
+        "subscribers": subs,
+        "followers": subs,               # alias so shared export code that reads `followers` works
+        "duration_seconds": duration,
+        "is_short": is_short,
+        "video_id": vid_id,
+        "title": title,
+        "caption": caption,
+        "transcript": transcript,
+        "hashtags": tags,
+        "post_date": _extract_post_date(d),
+        "content_type": "Short" if is_short else "Video",
+    }
+
+
+def _yt_subtitle_input() -> dict:
+    """
+    Subtitle/transcript download toggle for `streamers/youtube-scraper`. The
+    exact key isn't confirmed (candidates seen in the actor docs:
+    saveSubsToKVS / downloadSubtitles / subtitlesLanguage). We send the safest
+    superset — extra keys the actor doesn't recognise are ignored.
+    """
+    return {
+        "saveSubsToKVS": True,
+        "downloadSubtitles": True,
+        "subtitlesLanguage": "any",
+    }
+
+
+def _channel_url_from_handle(raw: str) -> str:
+    """Build a YouTube /videos channel URL from any handle / channel form."""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("http"):
+        # Already a URL; pass through. The actor accepts channel URLs as-is.
+        return s
+    if s.startswith("@"):
+        s = s[1:]
+    # Treat bare strings as channel handles.
+    return f"https://www.youtube.com/@{s}/videos"
+
+
 def process_job(job):
     # ── Job ID detection ─────────────────────────────────────────────────
     # database.py uses "job_id" as default. Check that first.
@@ -1310,20 +1510,32 @@ def process_job(job):
     else:
         import re as _re2
         _url = str(job.get("target_url",""))
-        _m = _re2.search(r"instagram\.com/([^/?#]+)/?$", _url.rstrip("/") + "/")
-        if _m and _m.group(1) not in ("p","reel","stories","explore","reels","tv"):
-            kol = _m.group(1)
+        # YouTube handle forms: @handle, /channel/UCxxx, /c/Name, /user/Name.
+        _myt = _re2.search(r"youtube\.com/@([^/?#]+)", _url) or \
+               _re2.search(r"youtube\.com/(?:channel|c|user)/([^/?#]+)", _url)
+        if _myt:
+            kol = _myt.group(1)
         else:
-            _m2 = _re2.search(r"tiktok\.com/@([^/?#]+)", _url)
-            kol = _m2.group(1) if _m2 else (_url.lstrip("@").split("/")[-1].strip("/") or "unknown")
+            _m = _re2.search(r"instagram\.com/([^/?#]+)/?$", _url.rstrip("/") + "/")
+            if _m and _m.group(1) not in ("p","reel","stories","explore","reels","tv"):
+                kol = _m.group(1)
+            else:
+                _m2 = _re2.search(r"tiktok\.com/@([^/?#]+)", _url)
+                kol = _m2.group(1) if _m2 else (_url.lstrip("@").split("/")[-1].strip("/") or "unknown")
     apikey = job.get("apify_api_key") or APIFY_TOKEN
     is_ig  = plat == "Instagram"
     is_tt  = plat == "TikTok"
-    actors = IG if is_ig else TT
+    is_yt  = plat == "YouTube"
+    actors = YT if is_yt else (IG if is_ig else TT)
 
     if target and not target.startswith("http") and jtype not in ("Competitor Ads (Meta)", "YouTube Intelligence", "Trend Discovery (Hashtag)", "Ecom Listings"):
         c = target.replace("@","").strip()
-        target = f"https://www.instagram.com/{c}/" if is_ig else f"https://www.tiktok.com/@{c}"
+        if is_yt:
+            target = _channel_url_from_handle(c)
+        elif is_ig:
+            target = f"https://www.instagram.com/{c}/"
+        else:
+            target = f"https://www.tiktok.com/@{c}"
 
     print(f"\n{'='*48}\n🔄 {jid} | {plat} | {jtype}\n   Target: {target}")
 
@@ -1337,6 +1549,11 @@ def process_job(job):
             )
 
         if jtype == "Trend Discovery (Hashtag)":
+            if is_yt:
+                # UI hides YouTube from hashtag scrapes; this is the belt-and-braces
+                # guard so a hand-crafted job (or a bug in the platform toggle)
+                # can't sneak through and silently fail later.
+                raise ValueError("YouTube is not supported for hashtag/creator discovery")
             tags = [h.replace("#","").strip() for h in target.split(",") if h.strip()]
             if is_ig:
                 # actor's resultsLimit is PER HASHTAG — overshoots when multiple
@@ -1390,6 +1607,8 @@ def process_job(job):
             db.upsert_trend_discovery(supabase, payload)
 
         elif jtype == "Trend Discovery (User Profile)":
+            if is_yt:
+                raise ValueError("YouTube is not supported for hashtag/creator discovery")
             h = target.replace("@","").strip().split("/")[-1].strip("/")
             fmt = job.get("format_filter","All Formats")
             if is_ig:
@@ -1415,7 +1634,41 @@ def process_job(job):
             db.upsert_trend_discovery(supabase, payload)
 
         elif jtype == "Specific URLs (Video Stats)":
-            if is_ig:
+            if is_yt:
+                # YouTube URL stats: one video, type inferred from /shorts/ in
+                # the URL so we cap the unwanted type at 0 (no infinite-shorts
+                # bill if a long-form URL is passed, no infinite-videos if a
+                # Short URL is passed). Always explicit zeros — see _yt_caps.
+                is_short_url = "/shorts/" in str(target)
+                fmt_for_caps = "Shorts Only" if is_short_url else "Videos Only"
+                run_input = {
+                    "startUrls": [{"url": target}],
+                    **_yt_caps(fmt_for_caps, 1),
+                    "proxyConfiguration": {"useApifyProxy": True},
+                    **_yt_subtitle_input(),
+                }
+                data = call_apify(actors["video_stats"], run_input, apikey)
+                payload = []
+                for d in (data or []):
+                    m = _yt_map_video(d, channel_handle=kol)
+                    payload.append({
+                        "video_url":        m["url"] or target,
+                        "username":         m["username"] or kol,
+                        "play_count":       m["play_count"],
+                        "view_count":       m["view_count"],
+                        "likes":            m["likes"],
+                        "comments":         m["comments"],
+                        "shares":           m["shares"],
+                        "duration_seconds": m["duration_seconds"],
+                        "is_short":         m["is_short"],
+                        "video_id":         m["video_id"],
+                        "title":            m["title"],
+                        "transcript":       m["transcript"],
+                        "hashtags":         m["hashtags"],
+                        "subscribers":      m["subscribers"],
+                        "followers":        m["followers"],
+                    })
+            elif is_ig:
                 data = call_apify(actors["video_stats"],{"directUrls":[target],"resultsType":"details"},apikey)
                 payload = [{"video_url":target,"username":kol,"play_count":int(d.get("playCount") or d.get("videoPlayCount") or d.get("videoViewCount") or 0),
                             "likes":d.get("likesCount",0),"comments":d.get("commentsCount",0),
@@ -1425,7 +1678,24 @@ def process_job(job):
                 payload = [{"video_url":target,"username":kol,"play_count":int(d.get("playCount") or d.get("videoPlayCount") or d.get("videoViewCount") or 0),
                             "likes":d.get("diggCount",0),"comments":d.get("commentCount",0),
                             "shares":d.get("shareCount",0)} for d in data]
-            db.upsert_campaign_videos(supabase, plat, payload)
+            # Column-safe upsert — youtube_campaign_videos has extra columns
+            # (duration_seconds, is_short, video_id, transcript, hashtags,
+            # subscribers, followers) that IG/TikTok rows don't carry. If the
+            # migration hasn't run yet, retry without the YouTube-only columns.
+            try:
+                db.upsert_campaign_videos(supabase, plat, payload)
+            except Exception as db_err:
+                err_str = str(db_err).lower()
+                yt_only = ("duration_seconds", "is_short", "video_id", "transcript",
+                           "hashtags", "subscribers", "followers", "title")
+                if is_yt and any(c in err_str for c in yt_only):
+                    print(f"   ⚠️ DB rejected YouTube columns — retrying without them (run sql/youtube_platform.sql)")
+                    for row in payload:
+                        for c in yt_only:
+                            row.pop(c, None)
+                    db.upsert_campaign_videos(supabase, plat, payload)
+                else:
+                    raise
 
         elif jtype == "Profile Feed (Audit)":
             fmt = job.get("format_filter","All Formats")
@@ -1433,6 +1703,82 @@ def process_job(job):
             date_to   = str(job.get("date_to","") or "").strip()
             if date_from or date_to:
                 print(f"   📅 Date range: {date_from or 'start'} → {date_to or 'now'}")
+
+            if is_yt:
+                # YouTube profile audit: one channel URL, per-type caps drive
+                # Shorts/Videos/All Formats. ONE actor call (the main scraper
+                # returns both types in a single run) — no batching, no date
+                # over-fetch (the actor doesn't expose `onlyAfter`; date
+                # filtering happens at export time via the post_date column).
+                # `fetch_followers` is a no-op for YouTube — subscribers come
+                # back on every video result for free.
+                channel_url = target if str(target).startswith("http") else _channel_url_from_handle(kol)
+                run_input = {
+                    "startUrls": [{"url": channel_url}],
+                    **_yt_caps(fmt or "All Formats", limit),
+                    "proxyConfiguration": {"useApifyProxy": True},
+                    **_yt_subtitle_input(),
+                }
+                raw = call_apify(actors["profile"], run_input, apikey)
+                # Belt-and-braces type filter — actor's caps usually do the job
+                # but a stray item of the wrong type doesn't pollute the result.
+                items = _filter_yt_content(raw or [], fmt or "All Formats")
+                items = items[:limit] if limit else items
+                payload = []
+                for d in items:
+                    m = _yt_map_video(d, channel_handle=kol)
+                    if not m["url"]:
+                        continue
+                    payload.append({
+                        "post_url":         m["url"],
+                        "username":         m["username"] or kol,
+                        "caption":          m["caption"] or m["title"],
+                        "play_count":       m["play_count"],
+                        "view_count":       m["view_count"],
+                        "likes":            m["likes"],
+                        "comments":         m["comments"],
+                        "shares":           m["shares"],
+                        "post_date":        m["post_date"],
+                        "content_type":     m["content_type"],
+                        "duration_seconds": m["duration_seconds"],
+                        "is_short":         m["is_short"],
+                        "video_id":         m["video_id"],
+                        "title":            m["title"],
+                        "transcript":       m["transcript"],
+                        "hashtags":         m["hashtags"],
+                        "subscribers":      m["subscribers"],
+                        "followers":        m["followers"],
+                    })
+                if payload:
+                    # Column-safe upsert: drop YouTube-only columns if the
+                    # migration hasn't run yet (parallels the IG fallback below).
+                    try:
+                        db.upsert_influencer_profiles(supabase, plat, payload)
+                        print(f"   🗄️ YT @{kol}: {len(payload)} row(s) saved")
+                    except Exception as db_err:
+                        err_str = str(db_err).lower()
+                        yt_only = ("duration_seconds", "is_short", "video_id", "transcript",
+                                   "hashtags", "subscribers", "followers", "title",
+                                   "view_count", "content_type", "post_date")
+                        if any(c in err_str for c in yt_only):
+                            print(f"   ⚠️ DB rejected YouTube columns — retrying stripped (run sql/youtube_platform.sql)")
+                            for row in payload:
+                                for c in yt_only:
+                                    row.pop(c, None)
+                            db.upsert_influencer_profiles(supabase, plat, payload)
+                            print(f"   🗄️ YT @{kol}: {len(payload)} row(s) saved (fallback)")
+                        else:
+                            raise
+                    db.write_kol_snapshot(supabase, pid, kol, plat, payload)
+                else:
+                    print(f"   ⚠️ YT @{kol}: 0 rows — channel may be empty or unreachable")
+                # Done — skip the IG/TikTok batch logic below. YouTube doesn't
+                # batch (the actor takes one channel URL per run, not a list),
+                # so finalise this job ourselves and return.
+                print(f"   📊 YouTube profile audit: {len(payload)} row(s)")
+                print(f"✅ {jid} done.")
+                db.update_job_status(supabase, jid, "COMPLETED", id_col=id_col)
+                return
 
             # Follower lookup: only for post-related scrapes (image posts need a
             # follower-based engagement rate; reels use views) and only when the
@@ -1715,7 +2061,34 @@ def process_job(job):
             print(f"   📊 Stage 3 total: {total_saved} rows saved across {len(all_handles)} handle(s)")
 
         elif jtype == "Comments (Sentiment)":
-            if is_ig:
+            if is_yt:
+                # YouTube comments via `streamers/youtube-comments-scraper`.
+                # The exact max-comments key isn't confirmed (candidates seen
+                # in actor docs: maxComments / maxResults / commentsPerVideo).
+                # Send all three — the actor ignores unrecognised keys.
+                # comment_text MUST map to the same `comment_text` column the
+                # NLP engine reads so YouTube comments classify through the
+                # existing Indonesian/English nlp_engine with no special-casing.
+                run_input = {
+                    "startUrls":         [{"url": target}],
+                    "maxComments":       limit,
+                    "maxResults":        limit,
+                    "commentsPerVideo":  limit,
+                    "proxyConfiguration": {"useApifyProxy": True},
+                }
+                data = (call_apify(actors["comments"], run_input, apikey) or [])[:limit]
+                payload = []
+                for d in data:
+                    text = _yt_first_present(d, "text", "comment", "content", "commentText")
+                    author = _yt_first_present(d, "author", "authorName", "commentAuthor",
+                                               "channelName", "username", "user")
+                    payload.append({
+                        "video_url":          target,
+                        "influencer_username": kol,
+                        "commenter_username":  str(author or "").lstrip("@") or "unknown",
+                        "comment_text":        str(text or ""),
+                    })
+            elif is_ig:
                 data = call_apify(actors["comments"],{"directUrls":[target],"resultsLimit":limit,"includeReplies":False},apikey)[:limit]
                 payload = [{"video_url":target,"influencer_username":kol,
                             "commenter_username":d.get("ownerUsername"),"comment_text":d.get("text")} for d in data]

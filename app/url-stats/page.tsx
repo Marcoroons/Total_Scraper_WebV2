@@ -7,7 +7,7 @@ import { PlatformToggle } from "@/components/PlatformToggle";
 import { URLDataTable, type URLRow } from "@/components/URLDataTable";
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
-type Platform = "Instagram" | "TikTok";
+type Platform = "Instagram" | "TikTok" | "YouTube";
 
 const ACCENT = "#f59e0b";
 
@@ -96,7 +96,7 @@ export default function URLStatsPage() {
         {/* Platform */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-3">
           <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
-          <PlatformToggle value={platform} onChange={handlePlatformChange} />
+          <PlatformToggle value={platform} platforms={["Instagram", "TikTok", "YouTube"]} onChange={handlePlatformChange} />
         </div>
 
         {/* Rate toggle */}

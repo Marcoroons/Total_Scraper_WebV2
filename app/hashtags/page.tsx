@@ -188,6 +188,9 @@ export default function HashtagsPage() {
           <div className={`${cardCls} p-5 space-y-3`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
             <PlatformToggle value={platform} onChange={(p) => setPlatform(p as Platform)} />
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              YouTube isn&apos;t available here — it has no hashtag-feed equivalent. Use <a href="/url-stats" className="underline">URL</a>, <a href="/profile-tracker" className="underline">Profile</a>, or <a href="/comments" className="underline">Comment</a> scrapes for YouTube.
+            </p>
           </div>
           <div className={`${cardCls} p-5 space-y-2`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtags</p>

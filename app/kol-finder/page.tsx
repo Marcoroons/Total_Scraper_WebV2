@@ -357,6 +357,9 @@ export default function KolFinderPage() {
           <div className={`${cardCls} p-5 space-y-3`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
             <PlatformToggle value={platform} onChange={(p) => { setPlatform(p as Platform); setHashtagFilter(""); }} />
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              YouTube isn&apos;t available here — it has no creator-feed-by-hashtag equivalent. Use <a href="/profile-tracker" className="underline">Profile</a> scrapes to audit specific YouTube channels.
+            </p>
           </div>
           <div className={`${cardCls} p-5 space-y-2`}>
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Hashtags to mine for creators</p>

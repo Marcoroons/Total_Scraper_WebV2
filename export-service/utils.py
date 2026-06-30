@@ -250,7 +250,7 @@ def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
     # Type column: reels/videos carry views, photos don't. Prefer a stored
     # content_type when present; otherwise infer from the presence of a play count.
     _IMG_CT = {"image", "graphimage", "photo", "sidecar", "graphsidecar", "carousel"}
-    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv"}
+    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv", "short", "shorts"}
     def _vtype(row):
         ct = str(row.get("content_type", "") or "").strip().lower()
         if ct in _IMG_CT:
@@ -358,7 +358,7 @@ def generate_profile_audit_excel(
         df["content_type"] = ""
     df["content_type"] = df["content_type"].fillna("").astype(str)
     _IMG_CT = {"image", "graphimage", "photo", "sidecar", "graphsidecar", "carousel"}
-    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv"}
+    _VID_CT = {"video", "graphvideo", "reel", "clips", "igtv", "short", "shorts"}
     def _is_video_row(ct, plays) -> bool:
         c = str(ct or "").strip().lower()
         if c in _IMG_CT:
@@ -421,12 +421,18 @@ def generate_profile_audit_excel(
     det_play = _flag(_det, "play")   # Play Count column in Video Details
     det_view = _flag(_det, "view")   # View Count column in Video Details
 
-    # ── Content-type filter: keep videos, images, or both ───────────────────────
+    # ── Content-type filter: keep videos, images, shorts (YT), or all ───────────
+    # `shorts` is YouTube-only — keeps rows whose content_type tag is "short"
+    # (the worker sets this in _yt_map_video). It's a subset of `_is_video` so
+    # rows scraped before YouTube existed are unaffected.
     content_filter = _lay.get("content_filter") or "all"
     if content_filter == "videos":
         df = df[df["_is_video"]].reset_index(drop=True)
     elif content_filter == "images":
         df = df[~df["_is_video"]].reset_index(drop=True)
+    elif content_filter == "shorts":
+        _ct_lower = df["content_type"].astype(str).str.lower()
+        df = df[_ct_lower.isin({"short", "shorts"})].reset_index(drop=True)
 
     # ── Calculated-metric columns for the Video Details sheet ───────────────────
     # Honour the metrics the user selected at scrape time. Only those derivable

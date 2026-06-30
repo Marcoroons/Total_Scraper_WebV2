@@ -8,7 +8,7 @@ import { VideoURLTable, type VideoRow, newVideoRow } from "@/components/VideoURL
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 import { NlpSettingsPanel } from "@/components/NlpSettingsPanel";
 
-type Platform = "Instagram" | "TikTok";
+type Platform = "Instagram" | "TikTok" | "YouTube";
 type Tab = "scraper" | "nlp";
 
 const ACCENT = "#f472b6";
@@ -120,7 +120,7 @@ export default function CommentsPage() {
           {/* Platform */}
           <div className="bg-card border border-border rounded-xl p-5 space-y-3">
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
-            <PlatformToggle value={platform} onChange={(p) => setPlatform(p as Platform)} />
+            <PlatformToggle value={platform} platforms={["Instagram", "TikTok", "YouTube"]} onChange={(p) => setPlatform(p as Platform)} />
           </div>
 
           {/* Video URL + KOL table */}

@@ -66,7 +66,11 @@ export const DEFAULT_METRICS = [
 export type SheetKey = "summary" | "details" | "notes";
 
 export type ViewMetric = "play_count" | "view_count";
-export type ContentFilter = "all" | "videos" | "images";
+// `images` is IG-only (TikTok/YouTube have no photo posts); `shorts` is
+// YouTube-only. The export-service treats `shorts` the same as `videos` for
+// per-row layout (both carry view counts) and uses the column tag to mark
+// rows. Keeping all options in one union so the picker is single-source.
+export type ContentFilter = "all" | "videos" | "images" | "shorts";
 
 export interface ExportLayout {
   summary: { enabled: boolean; images: boolean; dates: boolean; kpi: boolean; videos: boolean };

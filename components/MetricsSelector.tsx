@@ -1,22 +1,27 @@
 "use client";
 
-type Platform = "Instagram" | "TikTok";
+type Platform = "Instagram" | "TikTok" | "YouTube";
 
+// YouTube has a real public view count (unlike TikTok) so it gets the
+// view-based metrics (VTR, View Count). YouTube actors don't expose shares,
+// so Virality Rate is dropped for YouTube and the Shares raw column is omitted.
 const RAW_METRICS: Record<Platform, string[]> = {
   Instagram: ["Username", "Video URL", "Play Count", "View Count", "Likes", "Comments", "Shares"],
   TikTok:    ["Username", "Video URL", "Play Count", "Likes", "Comments", "Shares"],
+  YouTube:   ["Username", "Video URL", "Play Count", "View Count", "Likes", "Comments"],
 };
 
 const CALC_METRICS: Record<Platform, string[]> = {
   Instagram: ["Engagement Rate", "Applause Rate", "VTR", "Virality Rate", "CPV ($)", "Comment/View Ratio"],
   TikTok:    ["Engagement Rate", "Applause Rate", "Virality Rate", "CPV ($)", "Comment/View Ratio"],
+  YouTube:   ["Engagement Rate", "Applause Rate", "VTR", "CPV ($)", "Comment/View Ratio"],
 };
 
 const TOOLTIPS: Record<string, string> = {
-  "Engagement Rate":    "(Likes + Comments + Shares) / Play Count × 100%",
+  "Engagement Rate":    "(Likes + Comments + Shares) / Play Count × 100% — YouTube has no shares, so its ER is (Likes + Comments) / Views",
   "Applause Rate":      "Likes / Play Count × 100%",
-  "VTR":                "View Count / Play Count × 100%  (3-second views, Instagram only)",
-  "Virality Rate":      "Shares / Play Count × 100%",
+  "VTR":                "View Count / Play Count × 100% (Instagram + YouTube — has real view counts)",
+  "Virality Rate":      "Shares / Play Count × 100% (Instagram + TikTok only — YouTube actors don't expose shares)",
   "CPV ($)":            "Rate ($) ÷ Play Count — requires Rate column enabled",
   "Comment/View Ratio": "Comments / Play Count × 100%",
 };

@@ -7,15 +7,38 @@ import { useJobs, type JobPayload } from "@/lib/hooks/useJobs";
 import { PlatformToggle } from "@/components/PlatformToggle";
 import { ApifyKeyInput } from "@/components/ApifyKeyInput";
 
-type Platform = "Instagram" | "TikTok";
+type Platform = "Instagram" | "TikTok" | "YouTube";
 
 const ACCENT = "#a78bfa";
 
-const FORMAT_OPTIONS = ["Reels Only", "All Formats", "Images/Carousel Only"] as const;
+// Per-platform format choices. YouTube has no posts/images, so the axis is
+// Shorts/Videos instead of Reels/Images. TikTok is all-video — no card shown.
+// The strings here are what the worker's format_filter switch expects (see
+// `_yt_caps` in worker.py); don't rename without updating both sides.
+const FORMAT_OPTIONS_BY_PLATFORM: Record<Platform, readonly string[]> = {
+  Instagram: ["Reels Only", "All Formats", "Images/Carousel Only"],
+  YouTube:   ["Shorts Only", "Videos Only", "All Formats"],
+  TikTok:    [],
+};
 
 function extractHandle(raw: string, platform: Platform): string {
   const s = raw.trim();
   if (!s) return "";
+  // YouTube video/short URLs pass through unchanged — the worker scrapes the
+  // video directly rather than extracting a channel. For channel forms,
+  // pull the handle out so we can build the /videos channel URL later.
+  if (platform === "YouTube") {
+    if (s.startsWith("@")) return s.slice(1).split("/")[0].trim();
+    if (!s.startsWith("http")) return s.replace(/[^\w.-]/g, "");
+    // Video URL forms — keep the full URL, the worker handles them.
+    if (s.includes("/watch?") || s.includes("youtu.be/") || s.includes("/shorts/")) {
+      return s;
+    }
+    // Channel URL forms: /@handle, /channel/UCxxx, /c/Name, /user/Name
+    const m = s.match(/youtube\.com\/(?:@([^/?#]+)|channel\/([^/?#]+)|c\/([^/?#]+)|user\/([^/?#]+))/);
+    if (m) return m[1] || m[2] || m[3] || m[4] || "";
+    return "";
+  }
   if (s.startsWith("@")) return s.slice(1).split("/")[0].trim();
   if (!s.startsWith("http")) return s.replace(/[^\w._]/g, "");
   const path = s.replace(/https?:\/\/(www\.)?/, "").replace(/^\/|\/$/g, "");
@@ -117,9 +140,11 @@ export default function ProfileTrackerPage() {
   const [successCount, setSuccessCount] = useState<number | null>(null);
 
   const isTikTok = platform === "TikTok";
+  const formatOptions = FORMAT_OPTIONS_BY_PLATFORM[platform];
   // "Post-related" = the scrape will include image posts (which have no view
   // count), so follower-based engagement rate is relevant. Reels-only has none.
-  const postRelated = !isTikTok && (format === "All Formats" || format === "Images/Carousel Only");
+  // YouTube has no images, so this stays Instagram-specific.
+  const postRelated = platform === "Instagram" && (format === "All Formats" || format === "Images/Carousel Only");
   const today = new Date().toISOString().split("T")[0];
   const dateInvalid = dateFrom && dateTo && dateFrom > dateTo;
 
@@ -128,7 +153,7 @@ export default function ProfileTrackerPage() {
     setSuccessCount(null);
 
     const errs: string[] = [];
-    if (!isTikTok && !format) errs.push("Content type not selected (choose Reels Only, All Formats, or Images/Carousel Only).");
+    if (formatOptions.length > 0 && !format) errs.push("Content type not selected — pick one of the options above.");
     const filled = profiles.filter((p) => p.trim());
     if (filled.length === 0) errs.push("No profiles entered — add at least one URL or @handle.");
     if (dateInvalid) errs.push("Date range invalid — start date is after end date.");
@@ -149,9 +174,14 @@ export default function ProfileTrackerPage() {
         warnings.push(`Could not extract username from: ${raw.slice(0, 50)}`);
         continue;
       }
+      // YouTube: pass through video URLs as-is; build a channel /videos URL
+      // from bare handles. extractHandle returns the original URL when it
+      // recognises a video form.
       const url = platform === "Instagram"
         ? `https://www.instagram.com/${handle}/`
-        : `https://www.tiktok.com/@${handle}`;
+        : platform === "TikTok"
+        ? `https://www.tiktok.com/@${handle}`
+        : (handle.startsWith("http") ? handle : `https://www.youtube.com/@${handle}/videos`);
 
       // sort_by / incl_top5 / incl_bot5 are NOT columns in scrape_jobs —
       // they are export-time parameters passed to /export/profile-audit.
@@ -164,7 +194,7 @@ export default function ProfileTrackerPage() {
         rate:          "",
         raw_metrics:   [],
         calc_metrics:  [],
-        format_filter: isTikTok ? "All Formats" : format,
+        format_filter: formatOptions.length ? format : "All Formats",
         target_limit:  postLimit,
         max_retries:   retries,
         ...(startMode === "specific" && dateFrom ? { date_from: dateFrom } : {}),
@@ -210,6 +240,7 @@ export default function ProfileTrackerPage() {
           <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Platform</p>
           <PlatformToggle
             value={platform}
+            platforms={["Instagram", "TikTok", "YouTube"]}
             onChange={(p) => {
               setPlatform(p as Platform);
               setFormat("");
@@ -217,14 +248,14 @@ export default function ProfileTrackerPage() {
           />
         </div>
 
-        {/* Format (Instagram only) */}
-        {!isTikTok && (
+        {/* Format (hidden for TikTok — all-video, no choice) */}
+        {formatOptions.length > 0 && (
           <div className="bg-card border border-border rounded-xl p-5 space-y-3">
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
               Content type <span className="text-red-400">*</span>
             </p>
             <div className="flex flex-wrap gap-2">
-              {FORMAT_OPTIONS.map((opt) => (
+              {formatOptions.map((opt) => (
                 <button
                   key={opt}
                   type="button"
@@ -243,6 +274,11 @@ export default function ProfileTrackerPage() {
             {format === "Reels Only" && (
               <p className="text-xs text-muted-foreground">
                 Uses the dedicated Apify Reel Scraper — chronological, excludes pinned. Cheaper and more accurate than scraping all posts.
+              </p>
+            )}
+            {platform === "YouTube" && format === "Shorts Only" && (
+              <p className="text-xs text-muted-foreground">
+                Caps the regular-video pull at 0 so only Shorts are scraped — never pulls infinite videos by accident.
               </p>
             )}
           </div>
@@ -433,7 +469,7 @@ export default function ProfileTrackerPage() {
               {/* Config summary */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
                 <div><span className="text-muted-foreground">Platform: </span><span className="text-foreground font-medium">{platform}</span></div>
-                {!isTikTok && <div><span className="text-muted-foreground">Content: </span><span className="text-foreground font-medium">{format || "—"}</span></div>}
+                {formatOptions.length > 0 && <div><span className="text-muted-foreground">Content: </span><span className="text-foreground font-medium">{format || "—"}</span></div>}
                 <div><span className="text-muted-foreground">Posts/profile: </span><span className="text-foreground font-medium">{postLimit}</span></div>
                 <div><span className="text-muted-foreground">Date range: </span><span className="text-foreground font-medium">{(startMode === "specific" && dateFrom) || "start"} → {(endMode === "specific" && dateTo) || "now"}</span></div>
                 {(startMode === "specific" || endMode === "specific") && (
