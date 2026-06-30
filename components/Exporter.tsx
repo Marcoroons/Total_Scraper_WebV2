@@ -13,6 +13,7 @@ import {
   FUNCTION_CALC_METRICS, FUNCTION_SHOWS_METRICS, FUNCTION_SHOWS_BUILDER,
 } from "@/lib/exportConfig";
 import { CALC_METRICS } from "@/components/MetricsSelector";
+import { ExportPreview } from "@/components/ExportPreview";
 
 // ─── Date range presets ───────────────────────────────────────────────────────
 
@@ -713,6 +714,21 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                         onChange={(e) => setSheetEnabled("notes", e.target.checked)} />
                       Export Notes sheet
                     </label>
+                  </div>
+
+                  {/* Live layout preview — mock data, no network. Reflects
+                      every toggle above in real time so users can see the
+                      column lineup, sheet order, and content-filter effect
+                      before they download. */}
+                  <div className="pt-2 border-t border-border">
+                    <ExportPreview
+                      layout={layout}
+                      rawMetrics={rawMetrics}
+                      calcMetrics={calcMetrics}
+                      sortBy={sortBy}
+                      inclTop5={inclTop5}
+                      inclBot5={inclBot5}
+                    />
                   </div>
                 </div>
               )}
