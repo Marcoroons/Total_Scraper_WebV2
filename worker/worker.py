@@ -1800,7 +1800,16 @@ def process_job(job):
                 for d in (data or []):
                     m = _yt_map_video(d, channel_handle=kol)
                     payload.append({
-                        "video_url":        m["url"] or target,
+                        # MUST use `target` (the original user-pasted URL) not
+                        # the actor's normalized URL. The export queries
+                        # video_url IN (job.target_url, …); if we store the
+                        # actor's canonical form ("https://www.youtube.com/
+                        # shorts/abc"), it won't match the user's input
+                        # ("https://youtube.com/shorts/abc?si=tracking") and
+                        # the export returns 404. IG / TT branches use
+                        # `target` for the same reason — keep the contract
+                        # consistent across platforms.
+                        "video_url":        target,
                         "username":         m["username"] or kol,
                         "play_count":       m["play_count"],
                         "view_count":       m["view_count"],
@@ -2240,9 +2249,13 @@ def process_job(job):
                     if d.get("replyToCid"):
                         continue
                     payload.append({
-                        # `pageUrl` is per-row in the response — use it so multi-URL
-                        # comment scrapes don't all collapse onto the job's `target`.
-                        "video_url":          str(_yt_first_present(d, "pageUrl") or target),
+                        # Use `target` (the original job URL) so the export
+                        # query matches — same reason as the video-stats path.
+                        # YT comment jobs are single-URL today; if we ever
+                        # batch multiple video URLs into one job, we'd need to
+                        # match `pageUrl` back to the job's target list, but
+                        # storing pageUrl directly would break export lookup.
+                        "video_url":          target,
                         "influencer_username": kol,
                         "commenter_username":  str(author or "").lstrip("@") or "unknown",
                         "comment_text":        str(text or ""),
