@@ -91,6 +91,64 @@ def _xlsx_response(buf: io.BytesIO, filename: str) -> StreamingResponse:
     )
 
 
+# ── URL normalization (YouTube tracking-param tolerance) ─────────────────────
+# Background: the user can paste a YouTube URL in many forms — with `?si=...`
+# tracking, mobile prefix, `youtu.be/...` short form, http vs https. The Apify
+# actor canonicalises everything to `https://www.youtube.com/<path>` before
+# returning items. Older scraped rows have the canonical form stored in
+# video_url; newer scrapes (after the worker.py fix) store target verbatim.
+# To find rows from EITHER era, the export expands each input URL into its
+# variant set and queries `video_url IN (variants)`. IG/TT URLs are passed
+# through unchanged (no normalization).
+def _yt_url_variants(url: str) -> list[str]:
+    if not url:
+        return [url]
+    if "youtube" not in url and "youtu.be" not in url:
+        return [url]
+    # Split off query + fragment; we'll selectively put `v=` and `list=` back
+    # (those are real video/playlist identifiers, not tracking params).
+    main, _, query = url.partition("?")
+    main = main.split("#", 1)[0]
+    if main.startswith("http://"):
+        main = "https://" + main[len("http://"):]
+    # youtu.be/<id> → www.youtube.com/watch?v=<id>
+    if main.startswith("https://youtu.be/"):
+        vid = main[len("https://youtu.be/"):].strip("/").split("/")[0]
+        if vid:
+            main = "https://www.youtube.com/watch"
+            if "v=" not in (query or ""):
+                query = f"v={vid}" + (f"&{query}" if query else "")
+    # Force www. on bare and mobile hosts
+    if main.startswith("https://youtube.com/"):
+        main = "https://www." + main[len("https://"):]
+    if main.startswith("https://m.youtube.com/"):
+        main = "https://www." + main[len("https://m."):]
+    # Reconstruct, keeping only meaningful params (drop si=, t=, feature=, utm_*, …)
+    canonical = main
+    if query:
+        kept = []
+        for part in query.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k in ("v", "list"):
+                    kept.append(f"{k}={v}")
+        if kept:
+            canonical = main + "?" + "&".join(kept)
+    return [url] if canonical == url else [url, canonical]
+
+
+def _expand_url_variants(urls: list[str]) -> list[str]:
+    """Flatten + dedupe variants for all URLs in a list, preserving order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        for v in _yt_url_variants(u):
+            if v and v not in seen:
+                seen.add(v)
+                out.append(v)
+    return out
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -143,7 +201,10 @@ class EcomRequest(BaseModel):
 @app.post("/export/video-stats")
 def export_video_stats(req: VideoStatsRequest):
     supabase = _supabase()
-    rows = get_campaign_videos(supabase, req.platform, req.video_urls)
+    # Expand to canonical-URL variants so we find rows scraped before the
+    # worker started preserving target-URL form (old rows have www.youtube.com
+    # without tracking params; new rows have whatever the user pasted).
+    rows = get_campaign_videos(supabase, req.platform, _expand_url_variants(req.video_urls))
     if not rows:
         raise HTTPException(
             status_code=404,
@@ -197,7 +258,10 @@ def export_profile_audit(req: ProfileAuditRequest):
 @app.post("/export/nlp")
 def export_nlp(req: NLPRequest):
     supabase = _supabase()
-    rows = get_comments(supabase, req.platform, req.video_urls)
+    # Same URL-variants expansion as video-stats — comments rows can have
+    # either canonical or pasted-form video_url depending on when they were
+    # scraped.
+    rows = get_comments(supabase, req.platform, _expand_url_variants(req.video_urls))
     if not rows:
         raise HTTPException(
             status_code=404,
