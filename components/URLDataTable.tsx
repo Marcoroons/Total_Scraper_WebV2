@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
+import type { Platform } from "@/components/PlatformToggle";
 
 export interface URLRow {
   id: string;
@@ -9,10 +10,26 @@ export interface URLRow {
   rate: string;
 }
 
+// Platform-shaped placeholders so the ghost text matches the currently-selected
+// platform — pasting an IG URL into a YouTube tab is a common mis-paste, the
+// placeholder catches it before the user submits.
+const URL_PLACEHOLDER: Record<Platform, string> = {
+  Instagram: "https://www.instagram.com/p/...",
+  TikTok:    "https://www.tiktok.com/@user/video/...",
+  YouTube:   "https://www.youtube.com/watch?v=... or /shorts/...",
+};
+
+const KOL_PLACEHOLDER: Record<Platform, string> = {
+  Instagram: "@handle",
+  TikTok:    "@handle",
+  YouTube:   "@channel",
+};
+
 interface URLDataTableProps {
   rows: URLRow[];
   onChange: (rows: URLRow[]) => void;
   includeRate: boolean;
+  platform?: Platform;   // defaults to Instagram for back-compat
 }
 
 function makeRow(): URLRow {
@@ -26,7 +43,9 @@ function update(rows: URLRow[], id: string, patch: Partial<URLRow>): URLRow[] {
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
 
-export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps) {
+export function URLDataTable({ rows, onChange, includeRate, platform = "Instagram" }: URLDataTableProps) {
+  const urlPlaceholder = URL_PLACEHOLDER[platform];
+  const kolPlaceholder = KOL_PLACEHOLDER[platform];
   function handleUrlPaste(e: React.ClipboardEvent<HTMLInputElement>, rowId: string) {
     const text = e.clipboardData.getData("text");
     const lines = text
@@ -83,14 +102,14 @@ export function URLDataTable({ rows, onChange, includeRate }: URLDataTableProps)
               value={row.url}
               onChange={(e) => onChange(update(rows, row.id, { url: e.target.value }))}
               onPaste={(e) => handleUrlPaste(e, row.id)}
-              placeholder="https://www.instagram.com/p/…"
+              placeholder={urlPlaceholder}
               className={inputCls}
             />
             <input
               type="text"
               value={row.kol}
               onChange={(e) => onChange(update(rows, row.id, { kol: e.target.value }))}
-              placeholder="@handle"
+              placeholder={kolPlaceholder}
               className={inputCls}
             />
             {includeRate && (

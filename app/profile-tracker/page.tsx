@@ -56,14 +56,25 @@ function extractHandle(raw: string, platform: Platform): string {
 const inputCls =
   "px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
 
+// Per-platform ghost text — flips alongside the platform toggle so the example
+// URL always matches what the user just picked.
+const PROFILE_PLACEHOLDER: Record<Platform, string> = {
+  Instagram: "https://www.instagram.com/username/ or @handle",
+  TikTok:    "https://www.tiktok.com/@username or @handle",
+  YouTube:   "https://www.youtube.com/@channel/videos or @channel",
+};
+
 function ProfileTable({
   rows,
   onChange,
+  platform,
 }: {
   rows: string[];
   onChange: (r: string[]) => void;
+  platform: Platform;
 }) {
   const uid = useId();
+  const placeholder = PROFILE_PLACEHOLDER[platform];
 
   function update(i: number, v: string) {
     const next = [...rows];
@@ -92,7 +103,7 @@ function ProfileTable({
           <input
             type="text"
             value={row}
-            placeholder="https://www.instagram.com/username/ or @handle"
+            placeholder={placeholder}
             onChange={(e) => update(i, e.target.value)}
             onPaste={(e) => handlePaste(i, e)}
             className={`flex-1 ${inputCls}`}
@@ -448,7 +459,7 @@ export default function ProfileTrackerPage() {
               paste multiple lines to fill all at once
             </span>
           </p>
-          <ProfileTable rows={profiles} onChange={setProfiles} />
+          <ProfileTable rows={profiles} onChange={setProfiles} platform={platform} />
         </div>
 
         {/* Apify key */}

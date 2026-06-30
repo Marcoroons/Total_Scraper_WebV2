@@ -131,7 +131,7 @@ export default function CommentsPage() {
                 paste lines as URL[tab]KOL or URL,KOL to fill both columns at once
               </span>
             </p>
-            <VideoURLTable rows={rows} onChange={setRows} />
+            <VideoURLTable rows={rows} onChange={setRows} platform={platform} />
           </div>
 
           {/* Max comments */}

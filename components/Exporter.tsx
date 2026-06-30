@@ -103,6 +103,18 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   const [scheduling,  setScheduling]  = useState(false);
   const [scheduleMsg, setScheduleMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // ── Selection lock ────────────────────────────────────────────────────────
+  // Mixing job types or platforms in one export workbook doesn't make sense
+  // (different column schemas, different metric sets). Once the user picks
+  // their first job, lock the visible list to its (platform, job_type) so
+  // they can't accidentally build a mixed selection. The lock clears the
+  // moment the last selection is removed.
+  const selectionLock = useMemo(() => {
+    if (selected.size === 0) return null;
+    const first = jobs.find((j) => selected.has(j.job_id));
+    return first ? { platform: first.platform, jobType: first.job_type } : null;
+  }, [jobs, selected]);
+
   // ── Finished jobs (COMPLETED + FAILED) after filters ──────────────────────
   const finishedJobs = useMemo(() => {
     const bounds = presetBounds(preset, custom);
@@ -117,9 +129,15 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         const t = new Date(j.created_at).getTime();
         if (t < bounds.from || t > bounds.to) return false;
       }
+      // Selection lock: once at least one job is selected, hide jobs of a
+      // different platform or job_type so the user can't build a mixed
+      // batch. Clears when selection empties.
+      if (selectionLock && (j.platform !== selectionLock.platform || j.job_type !== selectionLock.jobType)) {
+        return false;
+      }
       return true;
     });
-  }, [jobs, fnFilter, preset, custom]);
+  }, [jobs, fnFilter, preset, custom, selectionLock]);
 
   // Drop selections that are no longer visible after a filter change.
   useEffect(() => {
@@ -134,6 +152,12 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   const dragging   = useRef(false);
   const dragMode   = useRef<"select" | "deselect">("select");
   const dragAnchor = useRef<number | null>(null);
+  // Scroll container ref + mouse-Y tracker for auto-scroll while dragging
+  // past the visible area. Without this, click-and-drag stops at whichever
+  // row is at the bottom of the scroll viewport.
+  const scrollRef  = useRef<HTMLDivElement>(null);
+  const mouseY     = useRef(0);
+  const scrollRaf  = useRef(0);
 
   const applyRange = useCallback((from: number, to: number, mode: "select" | "deselect") => {
     const [lo, hi] = from <= to ? [from, to] : [to, from];
@@ -158,6 +182,22 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     dragMode.current = mode;
     dragAnchor.current = index;
     applyRange(index, index, mode);
+    // Start the auto-scroll loop; it tears itself down once dragging ends.
+    if (scrollRaf.current === 0) {
+      const tick = () => {
+        if (!dragging.current) { scrollRaf.current = 0; return; }
+        const c = scrollRef.current;
+        if (c) {
+          const rect = c.getBoundingClientRect();
+          const EDGE = 60;     // pixels from edge to start auto-scrolling
+          const SPEED = 12;    // px per frame
+          if (mouseY.current - rect.top < EDGE)        c.scrollTop -= SPEED;
+          else if (rect.bottom - mouseY.current < EDGE) c.scrollTop += SPEED;
+        }
+        scrollRaf.current = requestAnimationFrame(tick);
+      };
+      scrollRaf.current = requestAnimationFrame(tick);
+    }
   }
   function onRowMouseEnter(index: number) {
     if (!dragging.current || dragAnchor.current === null) return;
@@ -165,8 +205,14 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   }
   useEffect(() => {
     const up = () => { dragging.current = false; dragAnchor.current = null; };
+    const move = (e: MouseEvent) => { mouseY.current = e.clientY; };
     window.addEventListener("mouseup", up);
-    return () => window.removeEventListener("mouseup", up);
+    window.addEventListener("mousemove", move);
+    return () => {
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("mousemove", move);
+      if (scrollRaf.current) cancelAnimationFrame(scrollRaf.current);
+    };
   }, []);
 
   // ── Selection helpers ─────────────────────────────────────────────────────
@@ -287,7 +333,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   function setViewMetric(m: "play_count" | "view_count") {
     setLayout((L) => ({ ...L, view_metric: m }));
   }
-  function setContentFilter(f: "all" | "videos" | "images") {
+  function setContentFilter(f: "all" | "videos" | "images" | "shorts") {
     setLayout((L) => ({ ...L, content_filter: f }));
   }
   function setSheetEnabled(key: SheetKey, on: boolean) {
@@ -322,6 +368,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     }
     setExporting({ done: 0, total: exportGroups.length });
     let failures = 0;
+    const failureDetails: string[] = [];
     for (let i = 0; i < exportGroups.length; i++) {
       const group = exportGroups[i];
       const endpoint = EXPORT_ENDPOINTS[group[0].job_type];
@@ -331,7 +378,21 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rawMetrics, rates: rateNums, layout })),
         });
-        if (!res.ok) { failures++; }
+        if (!res.ok) {
+          failures++;
+          // Surface the actual error detail — a 404 from /export/* means "no
+          // data found for these jobs" (e.g. the SQL migration hasn't run, or
+          // the scrape failed). The previous "cold-starting" alert was
+          // misleading for that case.
+          let detail = `${group[0].platform} · ${group[0].job_type}: HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            const msg = (body as { error?: string; detail?: string }).error
+              ?? (body as { error?: string; detail?: string }).detail;
+            if (msg) detail = `${group[0].platform} · ${group[0].job_type}: ${msg}`;
+          } catch { /* response wasn't JSON — keep generic */ }
+          failureDetails.push(detail);
+        }
         else {
           const blob = await res.blob();
           const url  = URL.createObjectURL(blob);
@@ -345,11 +406,16 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           URL.revokeObjectURL(url);
         }
-      } catch { failures++; }
+      } catch (e) {
+        failures++;
+        failureDetails.push(`${group[0].platform} · ${group[0].job_type}: ${e instanceof Error ? e.message : "network error"}`);
+      }
       setExporting({ done: i + 1, total: exportGroups.length });
     }
     setExporting(null);
-    if (failures > 0) alert(`${failures} of ${exportGroups.length} export file(s) failed (the export service may be cold-starting — retry in ~30s).`);
+    if (failures > 0) {
+      alert(`${failures} of ${exportGroups.length} export file(s) failed:\n\n${failureDetails.join("\n")}\n\nIf the message says "No … data found", the scrape may not have completed yet — check the Queue, or run the SQL migration if this is a YouTube job (sql/youtube_platform.sql).`);
+    }
   }
 
   async function handleRescrape(job: Job) {
@@ -438,6 +504,27 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           </div>
         </div>
 
+        {/* Selection lock banner — visible only when at least one job is
+            selected, explaining why other types/platforms have disappeared
+            from the list and offering a one-click clear. */}
+        {selectionLock && (
+          <div className="px-5 py-2.5 border-b border-border flex items-center gap-3 text-xs"
+            style={{ background: "rgba(0,201,255,0.06)" }}>
+            <span className="text-foreground">
+              <span className="font-medium">Locked to {selectionLock.platform} · {selectionLock.jobType}</span>
+              <span className="text-muted-foreground"> — other platforms / types hidden so the export stays apples-to-apples.</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelected(new Set())}
+              className="ml-auto px-2.5 py-1 text-xs font-medium rounded-md border transition-colors hover:bg-primary/10"
+              style={{ borderColor: "rgba(0,201,255,0.3)", color: "#00c9ff" }}
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
+
         {error ? (
           <div className="m-5 rounded-xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>{error}</div>
         ) : isLoading ? (
@@ -445,8 +532,16 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
         ) : finishedJobs.length === 0 ? (
           <div className="p-12 text-center text-sm text-muted-foreground">No finished jobs for these filters.</div>
         ) : (
+          // Scroll wrapper: caps the list to roughly 25 rows worth so a long
+          // history doesn't push the export controls off-screen. `min(1200px,
+          // 70vh)` is hard-capped at ~25 rows (each ≈48px) on tall screens but
+          // shrinks to 70% of viewport on short ones so the export panel below
+          // is always at least partially visible. Thead is sticky so column
+          // labels stay pinned while scrolling. Auto-scroll-during-drag below
+          // lets click-and-drag multi-select reach rows past the fold.
+          <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: "min(1200px, 70vh)" }}>
           <table className="w-full text-sm" style={{ userSelect: "none" }}>
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr style={{ background: "#0f1e35" }}>
                 <th className="px-4 py-2.5 w-10">
                   <button onClick={toggleAll} className="w-4 h-4 rounded flex items-center justify-center border transition-all align-middle"
@@ -505,6 +600,7 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               })}
             </tbody>
           </table>
+          </div>
         )}
 
         {finishedJobs.length > 0 && (
@@ -654,15 +750,19 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                     </div>
                   )}
 
-                  {/* Content type filter */}
+                  {/* Content type filter — Shorts is YouTube-specific (other
+                      platforms have no Shorts equivalent); the export-service
+                      filters by content_type tag so the chip is safe to show
+                      on any platform but only meaningful for YouTube exports. */}
                   <div>
                     <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Content type</p>
                     <div className="flex flex-wrap gap-1.5">
                       {builderChip("All", layout.content_filter === "all", () => setContentFilter("all"))}
                       {builderChip("Videos only", layout.content_filter === "videos", () => setContentFilter("videos"))}
+                      {builderChip("Shorts only", layout.content_filter === "shorts", () => setContentFilter("shorts"))}
                       {builderChip("Images only", layout.content_filter === "images", () => setContentFilter("images"))}
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">Keeps the file apples-to-apples — only the same content type is aggregated together.</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">Keeps the file apples-to-apples — only the same content type is aggregated together. <span className="text-foreground">Shorts only</span> = YouTube Shorts; <span className="text-foreground">Images only</span> = Instagram photos &amp; carousels.</p>
                   </div>
 
                   {/* KOL Views sheet */}

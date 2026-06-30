@@ -1,5 +1,7 @@
 "use client";
 
+import type { Platform } from "@/components/PlatformToggle";
+
 export interface VideoRow {
   id: string;
   url: string;
@@ -10,15 +12,32 @@ export function newVideoRow(): VideoRow {
   return { id: Math.random().toString(36).slice(2), url: "", kol: "" };
 }
 
+// Per-platform ghost text so switching the toggle updates the example URL
+// to the right shape (catches IG-pasted-into-YouTube before submit).
+const URL_PLACEHOLDER: Record<Platform, string> = {
+  Instagram: "https://www.instagram.com/reel/...",
+  TikTok:    "https://www.tiktok.com/@user/video/...",
+  YouTube:   "https://www.youtube.com/watch?v=... or /shorts/...",
+};
+
+const KOL_PLACEHOLDER: Record<Platform, string> = {
+  Instagram: "@username",
+  TikTok:    "@username",
+  YouTube:   "@channel",
+};
+
 interface Props {
   rows: VideoRow[];
   onChange: (rows: VideoRow[]) => void;
+  platform?: Platform;
 }
 
 const inputCls =
   "w-full px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
 
-export function VideoURLTable({ rows, onChange }: Props) {
+export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props) {
+  const urlPlaceholder = URL_PLACEHOLDER[platform];
+  const kolPlaceholder = KOL_PLACEHOLDER[platform];
   function update(id: string, field: keyof Omit<VideoRow, "id">, value: string) {
     onChange(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   }
@@ -81,14 +100,14 @@ export function VideoURLTable({ rows, onChange }: Props) {
             value={row.url}
             onChange={(e) => update(row.id, "url", e.target.value)}
             onPaste={(e) => handlePaste(e, row.id)}
-            placeholder="https://www.instagram.com/reel/..."
+            placeholder={urlPlaceholder}
             className={inputCls}
           />
           <input
             type="text"
             value={row.kol}
             onChange={(e) => update(row.id, "kol", e.target.value)}
-            placeholder="@username"
+            placeholder={kolPlaceholder}
             className="px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
           <button

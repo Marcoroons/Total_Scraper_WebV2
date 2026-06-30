@@ -136,7 +136,7 @@ export default function URLStatsPage() {
               (paste multiple lines to add in bulk)
             </span>
           </p>
-          <URLDataTable rows={rows} onChange={setRows} includeRate={includeRate} />
+          <URLDataTable rows={rows} onChange={setRows} includeRate={includeRate} platform={platform} />
         </div>
 
         {/* Metrics note — selection moved to export */}
