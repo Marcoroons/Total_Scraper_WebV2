@@ -94,24 +94,89 @@ ALTER TABLE public.scrape_jobs ADD COLUMN IF NOT EXISTS date_multiplier numeric 
 - **Scheduled email reports** (Exporter): worker processes `scheduled_reports` at a chosen ICT time (HH:MM, stored in `send_time`). Sends a data workbook (not the formatted export yet); "rescrape before sending" toggle not yet honored.
 - **Queue:** row-select + bulk delete + bulk re-scrape; `<CatSpinner />` / Task Loading video shows while jobs are pending.
 - **Auth forms** include `autoComplete` / `name` / `id` attributes so browser password managers autofill correctly.
-- **Competitor Analysis (`/competitor`)** — product-based Shopee + Tokopedia listings scraper + Excel export.
+- **Competitor Analysis (`/competitor`)** — product-based Shopee + Tokopedia listings scraper + Excel export. This section is the authoritative reference; the chronological Recent Changes log below records how it evolved.
+
+  **Scrape flow**
   - Job type: **`Ecom Listings`**. Config carried as `scrape_jobs.ecom_config` (jsonb):
-    `{platforms, products: [{brand, flavour}], official_store_filter, max_listings_per_product}`.
-  - The user lists **products to track** (brand + optional flavour). Each product → one Shopee search with query `"{brand} {flavour}"`, then **title-validated** at scrape time — a listing is kept ONLY if its title contains ALL brand tokens AND ALL flavour tokens (case-insensitive). This kills off-brand bleed (Shopee's loose search was previously returning T-shirts and other brands' products for keyword scrapes).
-  - The user-specified `flavour` is written to `ecom_listings.flavour` directly (no regex guessing). `brand_name` is the user-specified brand, not the actor's surface field.
-  - Legacy `keywords[]` / `shop_targets[]` / `brand_names[]` fields are still readable on `EcomJobConfig` so old queued jobs and old recent-jobs rows still display correctly; the worker auto-migrates legacy shape into single-brand products.
-  - Apify actors (hardcoded in `worker.py → ECOM_ACTORS`): Shopee `gio21/shopee-scraper`, Tokopedia `jupri/tokopedia-scraper`. Same `APIFY_TOKEN` env var — no new secrets.
-  - Worker writes one row per **variation** to `ecom_listings` with `parse_confidence='raw'`. Raw actor response stored in `raw_payload` (jsonb) so the exporter / Phase 2 can re-parse without re-scraping.
-  - **Excel export** (`POST /export/ecom` in `export-service`, file `export-service/ecom_export.py`): runs the Bahasa parser inline on every request (no DB persistence yet), then aggregates per-product and writes a 3-sheet workbook. Sheets:
-    - **Products** — one row per tracked product (brand × flavour), sorted by **Sales Volume** desc. Columns: Product, Sales Volume, Unit Price per 100ml/g, Top Products (top 3 listings by sold count, multi-line), Reviews, # Listings, Platforms.
-    - **Raw Listings** — every listing with the parser's output for spot-checking.
-    - **Notes** — caveats, regex coverage, parser limitations.
-    - Sales Volume = sum of `sold_count` (which the worker writes from `historicalSoldEstimated`). Reviews = sum of `reviewCount` from the actor's raw_payload (falls back to `—`).
-    - Unit Price per 100ml/g = median of `(per_unit_price / unit_volume × 100)` across the group; UOM follows the group's majority (liquids in ml, solids in g; mixed-UOM rows excluded).
-    - The exporter triggers from `/competitor` directly (not the main Exporter) with optional brand + platform filters; reuses the existing `/api/export` proxy with `endpoint: "export/ecom"`.
-  - **Old "Multi-Layer Intelligence" ecom sweep** (5 retailers + curl_cffi Cloudflare bypass + flat `ecommerce_products` table) was scrapped 2026-06-26. Code preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/` — see that folder's README for revival checklist.
-  - Phase 2 (TODO): **persist** the Bahasa parser output (`total_units`, `unit_volume`, `unit_volume_uom`, `container_type`, `flavour`, `price_per_100ml_or_g`) back into `ecom_listings` at scrape time and flip `parse_confidence` to `high` / `needs_review`. Same parser code as `export-service/ecom_export.py` — move into a shared module first.
-  - Phase 3 (TODO): cross-listing aggregation with median + MAD outlier guard + sold-count-weighted variant.
+    ```
+    { platforms:      ["Shopee", "Tokopedia"],
+      products:       [{brand, flavour, volume, type}, ...],  // brand required, others optional
+      max_listings_per_product: 10..200,
+      country:        "ID"|"MY"|"SG"|"TH"|"VN"|"PH"|"TW"|"BR"|"MX",  // Shopee marketplace; default ID
+      match_mode:     "strict" | "loose",                     // default 'strict'
+      // legacy fields (read-only fallback for pre-redesign jobs):
+      keywords[], shop_targets[], brand_names[], official_store_filter, specific_shops[] }
+    ```
+  - Each product → one search per platform. **Shopee actor `gio21/shopee-scraper`** input shape (verified against actor console): `{ location: "{brand} {flavour} {volume} {type}", country, maxItems, priceSlicing: false }`. `location` is the actor's primary search field — sending `keyword` instead returns default popular items (the source of an earlier mass off-brand-bleed bug).
+  - **Tokopedia actor `jupri/tokopedia-scraper`** input: `{ query: [target], limit: maxItems }`. Auto-disabled in the UI when `country != "ID"` (Tokopedia is Indonesia-only).
+  - **Title-validation at scrape time** is the precision-critical filter. A listing is kept ONLY if its (diacritic-normalized) title contains the right tokens:
+    - **strict mode** (default): ALL of brand + flavour + volume + type tokens
+    - **loose mode**: ONLY brand + flavour tokens (volume + type still flow into the search query but aren't enforced on results — useful when titles use spelling variants or word-order quirks)
+    - Brand tokens are strict-only (proper nouns; `Nescafé` ≠ `Nestlé`).
+    - Flavour & type tokens are **synonym-aware** (`_SYNONYM_GROUPS` in `worker.py`): `kaleng`↔`can`↔`canned`↔`tin`, `kotak`↔`box`↔`carton`↔`karton`↔`dus`, `botol`↔`bottle`, `pouch`↔`pack`↔`bag`, `coklat`↔`cokelat`↔`chocolate`↔`choco`, `susu`↔`milk`, `kopi`↔`coffee`, `ayam`↔`chicken`, etc.
+    - Diacritics are stripped on both sides (`_norm_text` uses NFKD + drop-combining): `nescafe` matches `Nescafé`.
+    - Volume matching is whitespace-tolerant: `240ml` matches `240ml`, `240 ml`, `240ML`.
+  - **No shop filter at scrape time.** Every title-validated row is written to `ecom_listings` regardless of seller. Shop filter is applied at export time — see below. (Previously enforced at scrape; moved 2026-06-29 because rejecting at scrape hid data and forced re-scrapes when the user changed their mind.)
+  - User-specified `flavour`, `volume`, `container_type` are written to the DB columns directly (not regex-guessed). When the user leaves any blank, those columns are NULL and the exporter falls back to regex parsing of the title.
+  - Worker writes one row per **variation** to `ecom_listings`. Each row tags `is_official_store` via `_shop_is_official` (shop name contains "official" or "mall", diacritic-aware). `raw_payload` (jsonb) stores the actor's complete response so the exporter / a future Phase 2 worker can re-parse without re-scraping.
+
+  **Worker visibility (Recent Jobs panel "yellow note")**
+  - Per-job summary written to `scrape_jobs.error_message` AFTER `update_job_status` (which clears `error_message` on COMPLETED): per-platform row count + breakdown of where rows went per product. Format:
+    ```
+    Shopee [strict]: 23 rows captured (12 flagged Official). Per-product:
+      cappuccino 240ml kaleng: 8→0 (title-mismatch) |
+      mocha 240ml kaleng: 10→4 |
+      latte 240ml kaleng: 10→1. Top shops: Nestlé Indonesia Official Store (8)...
+    ```
+  - User immediately sees which products returned what without checking Railway logs.
+  - `call_apify` is hardened against hangs (verified 2026-06-29): explicit timeouts on every HTTP call (60s start, 45s per-poll, 60s dataset fetch), poll loop capped at 60 iterations (~30 min ceiling) per actor call, transient errors retry with backoff instead of crashing. A genuinely stuck actor now raises a clear timeout, marks the job FAILED, and moves to the next.
+
+  **Captured Listings preview** (Competitor page, lives between the Recent Jobs panel and the Export panel)
+  - Supabase Realtime subscription on `ecom_listings` filtered by `project_id` — rows appear in the preview as the worker writes them, no manual refresh. Auto-opens whenever any Ecom Listings job is PENDING / AUTO_PROCESSING.
+  - Requires the table to be in the `supabase_realtime` publication. `sql/ecom_listings.sql` includes the `ALTER PUBLICATION` block (idempotent via `EXCEPTION WHEN duplicate_object`).
+  - **"view" button per row** opens a fullscreen modal showing the listing's complete `raw_payload` with sales / review fields explicitly highlighted at the top — fastest way to diagnose missing sold_count without opening Supabase.
+  - "Clear all" wipes contaminated listings via `DELETE /api/ecom-listings?project_id=X[&job_id=Y]`. Ownership-checked, scoped to the project.
+  - **Cancel** button on PENDING / AUTO_PROCESSING jobs in the Recent Jobs table — PATCHes to FAILED. Best-effort if the worker is mid-actor-call (Railway redeploy still needed for genuine pre-fix hangs).
+
+  **Excel export** (`POST /export/ecom` → `export-service/main.py`, file `export-service/ecom_export.py`)
+  - Triggered from the Competitor page's Export panel — NOT the main Exporter. Reuses the generic `/api/export` proxy with `endpoint: "export/ecom"`. Payload:
+    ```
+    { project_id, brand_filter, platform_filter, job_id,    // narrow what gets exported
+      shop_filter, specific_shops,                          // applied here, not at scrape
+      // (the page also stuffs the user's chosen filename into the download)
+    }
+    ```
+  - **Latest completed job only** toggle (default ON) — pins the export to the most recent COMPLETED Ecom Listings job so legacy contaminated rows don't pollute.
+  - **Shop filter** options: `all` / `official_only` / `non_official_only` / `specific_shops` (with comma-separated shop names input). Token-based diacritic-normalized match. `official_only` means "shop name contains 'official' or 'mall'" — works automatically for parent-brand stores like *Nestlé Indonesia Official Store* (Nescafe parent), *Wings Official* (Top Coffee parent), *Indofood* (Indomie parent), *Mayora* (Kopiko parent).
+  - **Filename override**: optional text field on the Export panel. Empty = default `competitor_analysis_<brand>.xlsx`. `.xlsx` extension auto-appended. Illegal path chars stripped.
+
+  **Workbook layout** (4 sheets)
+  - **Products** — one row per (brand × flavour × volume × type), PLUS a **highlighted aggregate row at the top of each brand's block** (`{brand} — all flavours (N variants)`) summing every Nescafe listing across all flavours so the user gets brand-wide totals + per-flavour drill-down in one view. Columns: Product, Sales Volume, Unit Price per 100ml/g, Top Products, Reviews, # Listings, Platforms. Sorted by Sales Volume desc within each brand block.
+  - **Raw Listings** — every parsed row + the parser's output for spot-checking.
+  - **Notes** — full caveat sheet (parser behaviour, synonym groups, multi-flavour expansion rules, sales-volume fallback semantics).
+  - **Multi-flavour expansion**: a listing whose title mentions multiple flavours from the project's tracked set is counted under EACH matching flavour. E.g. "NESCAFE MOCHA CAN. NESCAFE LATTE CAN." contributes to both Mocha and Latte aggregates rather than only whichever search found it.
+
+  **Bahasa parser** (lives in `export-service/ecom_export.py`, runs fresh on every export — no DB persistence yet)
+  - **Pack count** — `isi N`, `N pcs/pack/sachet`, `Nx`, `xN`, `1 lusin` (=12), `N lusin` (=N×12), `renceng N`. Volume tokens are STRIPPED before pack-count regex runs so `isi 220ml` → 1 unit (the 220 is volume, not a count) and `220ml x 6` → 6 (volume stripped, the 6 stays). Pack count is capped at 100 — anything higher is treated as 1 (mislabeled volume).
+  - **Volume** — `Nml` / `N L` / `Ng` / `N kg`. `L` → ×1000 → `ml`; `kg` → ×1000 → `g`. Liquid vs solid never mixed in one aggregate.
+  - **Container type** — `kaleng`→can, `kotak`/`karton`/`dus`→box, `botol`→bottle, `pouch`/`sachet`/`renceng`→pouch.
+  - **Flavour** — curated Indonesian keyword list (`FLAVOUR_KEYWORDS`). Extend the list to add new flavours.
+  - **Reviews extraction** — best-effort field sweep from `raw_payload`: tries `reviewCount` / `cmt_count` / `rating_count` / `ratingCount` / `numReviews` / etc.
+  - **`_ecom_safe_int`** (worker) handles 0 (preserved through truthiness fix via `_ecom_first_present`), `"500"`, `"1.2K"`, `"10rb"` (Indonesian *ribu* = thousand), `"500+"`, `"1.500"` (Indonesian thousand-dot, distinguished from decimal via the `len==3` heuristic), `"2.5M"`.
+  - **Sales Volume** in the workbook always shows a number. `_sum_or_zero` returns 0 instead of None when no listing in a group has an estimate; the cell shows `0 (no estimate)` when zero of the listings contributed.
+
+  **Old "Multi-Layer Intelligence" ecom sweep** (5 retailers + curl_cffi Cloudflare bypass + flat `ecommerce_products` table) was scrapped 2026-06-26. Code preserved at `DEAD_COMPETITOR_ANALYSIS_ENGINE/` for reference — see that folder's README.md for the why-removed and revival checklist.
+
+  **Future phases (not built)**
+  - Phase 2: **persist** the Bahasa parser output (`total_units`, `unit_volume`, `unit_volume_uom`, `container_type`, `flavour`, `price_per_100ml_or_g`) back into `ecom_listings` at scrape time so the exporter doesn't re-parse on every download. Same parser code; just lift it out of `export-service/ecom_export.py` into a shared module the worker can import too.
+  - Phase 3: cross-listing aggregation with median-of-medians, MAD outlier guard, sold-count-weighted variant, per-brand vs per-market granularity (see the original feature spec at top of the chronological log).
+- **KOL Finder (`/kol-finder`)** — ranks `trend_discovery` authors by reach / engagement / frequency, flags creators already scraped (global `influencer_profiles` table), per-hashtag filter. Recent precision pass:
+  - **Roster filters**: date window (All / 7 / 14 / 30 / 90 days — requires `trend_discovery.posted_at`, captured by the worker from IG `timestamp` / TT `createTimeISO`); "Exclude brand / shop accounts" toggle (default ON, strips usernames containing `official`, `.id`, `_id`, `indonesia`, `store`, `shop`, `brand`, `mart`, `resmi`, `.co`, `ltd`, `inc`); custom-pattern exclusion input; min-appearances slider.
+  - **Roster columns**: rank, creator, score, reach, avg views, likes, comments, shares, engagement rate, posts, latest post date.
+  - **Dedupe summary** above the table: "N found · X new · Y already in DB · Z filtered out".
+  - **Limit cap**: asking for 10 posts gives ≤10 total (capped post-scrape with `data[:limit]` for both IG and TikTok). Previously the IG hashtag actor's `resultsLimit` was per-hashtag so 3 hashtags × 10 = 30.
+  - **Trash icon next to the hashtag dropdown** — when a specific tag is selected, click to wipe every captured post for that hashtag on the selected platform via `DELETE /api/trends?project_id=X&hashtag=Y&platform=Z`. Token-aware match (`susu` won't accidentally wipe `susuformula`).
+- **Hashtag / Trends (`/hashtags`)** — chip row above the tabbed results, listing every distinct hashtag captured for the active platform with its post count. Each chip has an X button that triggers the same `DELETE /api/trends` route. Wipes only `trend_discovery` rows; the jobs in `scrape_jobs` stay.
 
 ## Persistent agent memory
 
@@ -124,6 +189,7 @@ summary; prefer the memory files for the latest commit-by-commit status if avail
 > **Rule:** every commit that ships a behaviour, schema, page, or component change must add a one-line entry here in the same commit. Format: `YYYY-MM-DD — <short summary> (commit <short-sha>)`. Also update the relevant body section above when the change affects schema, features, SQL migrations, or pages.
 
 - 2026-06-29 — **KOL Finder precision pass**: (1) limit overshoot fixed — IG hashtag scraper's `resultsLimit` is per-hashtag, so asking for 10 across 3 hashtags returned 25-30. Now caps total output at `limit` post-scrape for both IG + TikTok. (2) New SQL `sql/trend_discovery_posted_at.sql` adds `posted_at` column; worker captures it from IG's `timestamp` / TikTok's `createTimeISO` (column-safe upsert in `database.py`); `/api/trends` selects it. (3) Frontend gets a date-window filter (All / 7 / 14 / 30 / 90 days), "Exclude brand / shop accounts" toggle (default ON — strips usernames containing `official`, `.id`, `_id`, `indonesia`, `store`, `shop`, `brand`, `mart`, `resmi`, `.co`, `ltd`, `inc`), and a custom-pattern exclusion input. (4) Roster table now surfaces Likes / Comments / Shares as separate columns + a Latest-post-date column. (5) Dedupe summary banner ("12 new · 18 in DB · 4 filtered") so the cross-project dedupe is visible at a glance. CSV export includes all the new fields.
+- 2026-06-29 — **Brand-aggregate row + Excel filename rename + comprehensive CLAUDE.md compile**: (1) Products sheet now prepends a highlighted "{brand} — all flavours (N variants)" row at the top of each brand's block, summing every listing for that brand across all flavours / volumes / containers. Uses listing-equivalent dedupe (product_id+variation_id+platform) so multi-flavour bundles aren't double-counted in the brand total. (2) Filename override added to both the Competitor Analysis Export panel and the main Exporter — empty falls back to defaults, illegal path chars stripped, .xlsx auto-appended. Multi-file exports from the main Exporter get `-1` / `-2` suffixes. (3) CLAUDE.md Competitor Analysis + KOL Finder body sections rewritten to be authoritative for the next context — chronological changelog stays as commit history but the body is now the source of truth.
 - 2026-06-29 — **Pack-count & multi-flavour aggregation fixes** (Competitor Analysis export):
   1. `parse_pack_count` now strips volume tokens (`220ml`, `1 liter`, `100g`, etc.) BEFORE running pack-count regex, so `isi 220ml` and `220ml x 6` no longer get misread as 220 units. Pack count is also capped at 100; anything higher is treated as 1 (almost certainly mislabeled volume that escaped the strip).
   2. Multi-flavour listings now expand across groups: `aggregate_by_product` first collects every flavour the project tracks (per brand), then for each listing scans the title for ALL matching flavours and counts the listing under each. A bundle titled "NESCAFE MOCHA CAN. NESCAFE LATTE CAN" contributes to both Mocha and Latte aggregates instead of just whichever search found it.

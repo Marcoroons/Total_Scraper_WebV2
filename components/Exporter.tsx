@@ -89,6 +89,10 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
   // Export progress
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
   const [rescraping, setRescraping] = useState<string | null>(null);
+  // Optional custom filename — overrides batchExportFilename() when set. When
+  // exporting multiple groups (mixed scrape types/platforms split into
+  // separate files), each file gets the custom name suffixed with -1, -2…
+  const [customFilename, setCustomFilename] = useState("");
 
   // Schedule email
   const [recipient,   setRecipient]   = useState("");
@@ -331,7 +335,12 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
           const blob = await res.blob();
           const url  = URL.createObjectURL(blob);
           const a    = document.createElement("a");
-          a.href = url; a.download = batchExportFilename(group[0], group.length);
+          const cleanCustom = customFilename.trim().replace(/[/\\?%*:|"<>]/g, "").replace(/\.xlsx$/i, "");
+          const defaultName = batchExportFilename(group[0], group.length);
+          const filename = cleanCustom
+            ? (exportGroups.length > 1 ? `${cleanCustom}-${i + 1}.xlsx` : `${cleanCustom}.xlsx`)
+            : defaultName;
+          a.href = url; a.download = filename;
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           URL.revokeObjectURL(url);
         }
@@ -709,6 +718,16 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               )}
             </div>
             )}
+
+            {/* Optional custom filename — overrides the default */}
+            <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Filename (optional)</label>
+            <input
+              type="text"
+              value={customFilename}
+              onChange={(e) => setCustomFilename(e.target.value)}
+              placeholder="leave blank for default · multiple files get -1 -2 etc."
+              className="w-full mb-3 px-3 py-2 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
 
             <p className="text-xs text-muted-foreground mb-4">
               Compiles the selected completed jobs into a single Excel file, in the order they were scraped. Pick the calculated metrics above (profile-audit exports).

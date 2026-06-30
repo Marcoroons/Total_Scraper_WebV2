@@ -78,6 +78,7 @@ export default function CompetitorAnalysisPage() {
   const [exportLatestOnly, setExportLatestOnly] = useState<boolean>(true);   // default ON — avoids legacy contamination
   const [exportShopMode, setExportShopMode] = useState<EcomJobConfig["official_store_filter"]>("all");
   const [exportSpecificShops, setExportSpecificShops] = useState<string>("");
+  const [exportFilename, setExportFilename] = useState<string>("");   // optional override
   const [exporting,      setExporting]      = useState(false);
   const [exportMsg,      setExportMsg]      = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -332,8 +333,10 @@ export default function CompetitorAnalysisPage() {
       const blob = await res.blob();
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
+      const cleanCustom = exportFilename.trim().replace(/[/\\?%*:|"<>]/g, "").replace(/\.xlsx$/i, "");
       const slug = (exportBrand || "all").toLowerCase().replace(/\s+/g, "_");
-      a.href = url; a.download = `competitor_analysis_${slug}.xlsx`;
+      const filename = (cleanCustom || `competitor_analysis_${slug}`) + ".xlsx";
+      a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setExportMsg({ ok: true, text: "Downloaded — check your browser's Downloads." });
@@ -697,6 +700,19 @@ export default function CompetitorAnalysisPage() {
             <span className="text-muted-foreground"> — uncheck to include every captured listing across all scrapes</span>
           </span>
         </label>
+
+        {/* Custom filename — overrides the default 'competitor_analysis_<brand>.xlsx' */}
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-muted-foreground">Filename (optional)</p>
+          <input
+            type="text"
+            value={exportFilename}
+            onChange={(e) => setExportFilename(e.target.value)}
+            placeholder={`competitor_analysis_${(exportBrand || "all").toLowerCase().replace(/\s+/g, "_")}`}
+            className={`w-full ${inputCls}`}
+          />
+          <p className="text-[11px] text-muted-foreground">No extension needed — <code>.xlsx</code> appended automatically. Illegal path chars stripped.</p>
+        </div>
 
         {/* Shop filter — applied at export, not at scrape. Flip freely without re-scraping. */}
         <div className="space-y-2 pt-2">

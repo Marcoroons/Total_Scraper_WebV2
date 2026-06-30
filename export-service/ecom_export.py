@@ -491,8 +491,73 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             "platforms":         sorted({r.get("platform") for r in rows if r.get("platform")}),
         })
 
+    # Per-brand aggregate rows — "Nescafe (all flavours)" sums every Nescafe
+    # listing across all flavours / volumes / containers, so the user has a
+    # quick read on total brand presence. Appears at the top of each brand's
+    # block in the workbook.
+    by_brand: dict = defaultdict(list)
+    seen_per_brand: dict = defaultdict(set)   # dedupe by listing-equivalent so a
+                                              # multi-flavour bundle isn't double-counted
+    for r in parsed:
+        b = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
+        key = (r.get("product_id") or "") + "|" + (r.get("variation_id") or "") + "|" + (r.get("platform") or "")
+        if key in seen_per_brand[b]:
+            continue
+        seen_per_brand[b].add(key)
+        by_brand[b].append(r)
+
+    brand_aggregates = []
+    for brand, rows in by_brand.items():
+        uom = _dominant_uom(rows)
+        vol_rows = [r for r in rows if r.get("_unit_volume_uom") == uom]
+        per_100s = [_price_per_100(r) for r in vol_rows]
+        ranked = sorted((r for r in rows if r.get("_sold") is not None),
+                        key=lambda r: -(r["_sold"] or 0))[:3]
+        top_products = [
+            {"title": r.get("title") or "", "sold":  r.get("_sold") or 0,
+             "url":   r.get("url"),       "shop":  r.get("shop_name")}
+            for r in ranked
+        ]
+        sold_vals = [r["_sold"] for r in rows]
+        sold_known = [v for v in sold_vals if v is not None]
+        flavours_seen = sorted({(r.get("flavour") or "").strip().lower() for r in rows if (r.get("flavour") or "").strip()})
+        brand_aggregates.append({
+            "brand":             brand,
+            "flavour":           "__ALL__",            # sentinel for sorting
+            "container_type":    None,
+            "user_volume":       None,
+            "user_volume_uom":   None,
+            "product_label":     f"{brand} — all flavours ({len(flavours_seen)} variants)" if flavours_seen else f"{brand} — all listings",
+            "n_listings":        len(rows),
+            "sales_volume":      _sum_or_zero(sold_vals),
+            "sales_known_n":     len(sold_known),
+            "price_per_100":     _median_or_none(per_100s),
+            "price_per_100_uom": uom,
+            "reviews":           _sum_or_none([r["_reviews"] for r in rows]),
+            "avg_rating":        _mean_or_none([r["_rating"] for r in rows]),
+            "top_products":      top_products,
+            "platforms":         sorted({r.get("platform") for r in rows if r.get("platform")}),
+            "is_aggregate":      True,
+        })
+
+    # Sort: per brand, aggregate row first, then flavours by sales desc.
     out.sort(key=lambda r: -(r["sales_volume"] or 0))
-    return out
+    combined: list = []
+    by_brand_rows: dict = defaultdict(list)
+    for r in out:
+        by_brand_rows[r["brand"]].append(r)
+    for agg in brand_aggregates:
+        combined.append(agg)
+        for r in by_brand_rows.get(agg["brand"], []):
+            combined.append(r)
+    # Any brand that somehow had aggregate but no flavour rows (unlikely)
+    # is already handled above. Brands with no aggregate (shouldn't happen)
+    # would be dropped — append them as a safety net.
+    seen_brands = {a["brand"] for a in brand_aggregates}
+    for r in out:
+        if r["brand"] not in seen_brands:
+            combined.append(r)
+    return combined
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -577,7 +642,11 @@ def _products_sheet(wb: Workbook, product_rows: list[dict]) -> None:
         "Top Products (top 3 by sold)", "Reviews", "# Listings", "Platforms",
     ]
     _write_header(ws, headers)
+    agg_fill = PatternFill("solid", fgColor="1a2a44")   # subtle navy for aggregate rows
+    agg_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    row_idx = 1
     for r in product_rows:
+        row_idx += 1
         # Sales volume always shows a number. If actor returned no estimate
         # for any listing in the group, append '(no estimate)' for clarity.
         sv = r["sales_volume"]
@@ -593,6 +662,12 @@ def _products_sheet(wb: Workbook, product_rows: list[dict]) -> None:
             r["n_listings"],
             ", ".join(r["platforms"]) if r["platforms"] else "—",
         ])
+        if r.get("is_aggregate"):
+            # Highlight the brand-aggregate row so it visually separates each
+            # brand's block from the flavour-specific rows below it.
+            for c in ws[row_idx]:
+                c.fill = agg_fill
+                c.font = agg_font
     # Style: wrap "Top Products" column, give it more width and taller rows
     # so the 3-line top list is fully visible.
     for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
