@@ -309,6 +309,15 @@ def _sum_or_none(xs: list) -> int | None:
     return int(sum(xs))
 
 
+def _sum_or_zero(xs: list) -> int:
+    """Like _sum_or_none but returns 0 when every value is None — used for the
+    Sales Volume column so the user always sees a number, never '—'. None
+    values from the actor mean 'no recorded sales estimate', which is
+    operationally a zero for popularity ranking purposes."""
+    xs = [x for x in xs if x is not None]
+    return int(sum(xs)) if xs else 0
+
+
 def _dominant_uom(rows: list[dict]) -> str | None:
     """Pick the most common volume UOM in a group — needed because you can't
     sum ml and g, so we report the bundle volume in the group's majority UOM
@@ -403,6 +412,11 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             label_bits.append(ctype)
         product_label = " ".join(label_bits).strip()
 
+        # Sales volume: prefer a known sum, fall back to 0 when no listing in
+        # the group has a historicalSoldEstimated. sales_known_n surfaces the
+        # difference (0 listings contributed an estimate vs estimates summed to 0).
+        sold_vals = [r["_sold"] for r in rows]
+        sold_known = [v for v in sold_vals if v is not None]
         out.append({
             "brand":             brand,
             "flavour":           flavour,
@@ -411,7 +425,8 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             "user_volume_uom":   db_uom,
             "product_label":     product_label,
             "n_listings":        len(rows),
-            "sales_volume":      _sum_or_none([r["_sold"] for r in rows]),
+            "sales_volume":      _sum_or_zero(sold_vals),
+            "sales_known_n":     len(sold_known),
             "price_per_100":     _median_or_none(per_100s),
             "price_per_100_uom": uom_for_per100,
             "reviews":           _sum_or_none([r["_reviews"] for r in rows]),
@@ -420,7 +435,7 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             "platforms":         sorted({r.get("platform") for r in rows if r.get("platform")}),
         })
 
-    out.sort(key=lambda r: (r["sales_volume"] is None, -(r["sales_volume"] or 0)))
+    out.sort(key=lambda r: -(r["sales_volume"] or 0))
     return out
 
 
@@ -507,9 +522,15 @@ def _products_sheet(wb: Workbook, product_rows: list[dict]) -> None:
     ]
     _write_header(ws, headers)
     for r in product_rows:
+        # Sales volume always shows a number. If actor returned no estimate
+        # for any listing in the group, append '(no estimate)' for clarity.
+        sv = r["sales_volume"]
+        sv_str = f"{int(sv):,}".replace(",", ".") if sv else "0"
+        if r.get("sales_known_n", 0) == 0 and r["n_listings"] > 0:
+            sv_str += " (no estimate)"
         ws.append([
             r["product_label"],
-            _fmt_int(r["sales_volume"]),
+            sv_str,
             _fmt_per_100(r["price_per_100"], r["price_per_100_uom"]),
             _fmt_top_products(r["top_products"]),
             _fmt_int(r["reviews"]),

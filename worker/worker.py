@@ -412,6 +412,16 @@ def _ecom_safe_int(x):
         return int(float(x))
     except (TypeError, ValueError): return None
 
+def _ecom_first_present(*candidates):
+    """Return the first candidate that is not None / not empty-string.
+    Unlike `a or b or c`, this preserves a legitimate 0 — important for
+    historicalSoldEstimated where 0 means 'no recorded sales' (a useful
+    signal), not 'unknown' (which would be None)."""
+    for c in candidates:
+        if c is not None and c != "":
+            return c
+    return None
+
 def _worker_parse_volume(s: str):
     """Parse a user-typed volume string into (value, 'ml'|'g').
     '240ml' → (240, 'ml'); '1L' → (1000, 'ml'); '100g' → (100, 'g'); '1kg' → (1000, 'g').
@@ -516,10 +526,15 @@ def _shopee_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
         "brand_name": brand or None,
         "title":      str(raw.get("name") or raw.get("itemName") or raw.get("title") or "")[:500],
         "description": str(raw.get("description") or raw.get("desc") or "")[:8000] or None,
-        "rating":     _ecom_safe_float(raw.get("rating") or raw.get("ratingStar") or raw.get("itemRating")),
+        "rating":     _ecom_safe_float(_ecom_first_present(raw.get("rating"), raw.get("ratingStar"), raw.get("itemRating"))),
         # gio21/shopee-scraper returns 'historicalSoldEstimated'; older / other
-        # actors use 'historicalSold' / 'sold' / 'soldCount'. Try all of them.
-        "sold_count": _ecom_safe_int(raw.get("historicalSoldEstimated") or raw.get("historicalSold") or raw.get("sold") or raw.get("soldCount")),
+        # actors use 'historicalSold' / 'sold' / 'soldCount'. Try all of them
+        # via _ecom_first_present so a legit 0 (no recorded sales yet) isn't
+        # silently dropped by Python's `or` short-circuit.
+        "sold_count": _ecom_safe_int(_ecom_first_present(
+            raw.get("historicalSoldEstimated"), raw.get("historicalSold"),
+            raw.get("sold"), raw.get("soldCount"),
+        )),
         "url":        raw.get("itemUrl") or raw.get("url"),
         "parse_confidence": "raw",
         "raw_payload": raw,
@@ -531,13 +546,13 @@ def _shopee_to_rows(raw: dict, pid: str, jid: str, brand) -> list:
             vid = str(v.get("modelId") or v.get("id") or v.get("name") or "")[:64]
             rows.append({
                 **base, "variation_id": vid or "0",
-                "listing_price_idr": _ecom_parse_idr(v.get("price") or v.get("priceMin") or raw.get("price")),
-                "stock": "in_stock" if _ecom_safe_int(v.get("stock") or v.get("stockCount")) else "out_of_stock",
+                "listing_price_idr": _ecom_parse_idr(_ecom_first_present(v.get("price"), v.get("priceMin"), raw.get("price"))),
+                "stock": "in_stock" if _ecom_safe_int(_ecom_first_present(v.get("stock"), v.get("stockCount"))) else "out_of_stock",
             })
     else:
         rows.append({
             **base, "variation_id": "",
-            "listing_price_idr": _ecom_parse_idr(raw.get("price") or raw.get("priceMin")),
+            "listing_price_idr": _ecom_parse_idr(_ecom_first_present(raw.get("price"), raw.get("priceMin"))),
             "stock": "in_stock" if (raw.get("stock") or 1) else "out_of_stock",
         })
     return rows
