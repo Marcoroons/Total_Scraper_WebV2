@@ -150,10 +150,25 @@ def _norm_num(s: str) -> float:
 
 
 def parse_pack_count(text: str) -> tuple[int, str]:
-    """Return (total_units, confidence). Default to (1, 'no_signal')."""
+    """Return (total_units, confidence). Default to (1, 'no_signal').
+
+    Volume tokens are STRIPPED before pack-count regex runs — otherwise
+    'isi 220ml' would be parsed as 220 units (the 220 is volume), and
+    '220ml x 6' would be parsed as 220 units (the 220 is volume, not a count).
+    After stripping, only legitimate count signals remain: 'isi 24',
+    '6 pcs', '12 sachet', 'x 6', '1 lusin', etc.
+
+    Pack count is also capped at 100 — no consumer product ships in 200+
+    unit packs. Anything that high is almost certainly mislabeled volume
+    that escaped the strip (e.g. 'isi 250' with no unit). Defaults to 1
+    in that case so we don't divide the price by an absurd denominator."""
     if not text:
         return 1, "no_signal"
     t = text.lower()
+    # Strip every volume mention so '220ml', '1 liter', '100g' etc. no
+    # longer look like potential pack counts.
+    for rx, _ in _VOLUME_PATTERNS:
+        t = rx.sub(" ", t)
     for rx, special in _PACK_PATTERNS:
         m = rx.search(t)
         if m:
@@ -162,8 +177,11 @@ def parse_pack_count(text: str) -> tuple[int, str]:
             n = int(m.group(1))
             if special == "lusin":
                 return max(1, n) * 12, "lusin_n"
-            if 1 <= n <= 999:
+            if 1 <= n <= 100:
                 return n, "explicit"
+            # Implausibly large pack count — almost certainly a volume
+            # that slipped past the strip (e.g. 'isi 250' with no unit).
+            return 1, "no_signal"
     return 1, "no_signal"
 
 
@@ -361,13 +379,36 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
     / unit_volume * 100); Top Products = top 3 listings by sold; Reviews = sum.
     Groups with a different UOM are excluded from the per-100 aggregate so
     liquids and solids aren't mixed together."""
+    # First pass: collect the set of flavours the user is tracking in this
+    # project. We expand each listing to count under EVERY flavour from this
+    # set that appears in its title — so a bundle listing titled "NESCAFE MOCHA
+    # CAN. MINUMAN NESCAFE LATTE." contributes to BOTH Mocha and Latte
+    # aggregates rather than only the flavour the search happened to find it under.
+    project_flavours: set = {
+        (r.get("brand_name") or "").strip().lower() + "|" + (r.get("flavour") or "").strip().lower()
+        for r in parsed
+        if (r.get("flavour") or "").strip()
+    }
+    # Strip to just the flavour strings (lowercased) per brand.
+    flavours_by_brand: dict = defaultdict(set)
+    for r in parsed:
+        b = (r.get("brand_name") or "").strip()
+        f = (r.get("flavour") or "").strip().lower()
+        if b and f:
+            flavours_by_brand[b].add(f)
+
+    def _flavour_in_title(flavour: str, title_norm: str) -> bool:
+        """Re-use synonym-aware matching: every token of flavour must be in title."""
+        for tok in re.findall(r"[a-z0-9]+", _norm_text(flavour)):
+            if tok not in title_norm:
+                return False
+        return bool(flavour)
+
     groups: dict[tuple, list[dict]] = defaultdict(list)
+    multi_flavour_expansions = 0
     for r in parsed:
         brand   = (r.get("brand_name") or "(unbranded)").strip() or "(unbranded)"
-        flavour = (r.get("_flavour") or "").strip() or "(no flavour)"
-        # Group key uses the DB columns (which carry the user's intent), NOT
-        # the regex-parsed values. When the user didn't specify volume/type,
-        # the DB columns are NULL and all such listings cluster into one row.
+        primary_flavour = (r.get("_flavour") or "").strip().lower() or None
         ctype       = (r.get("container_type") or "") or None
         db_vol      = r.get("unit_volume")
         db_uom      = r.get("unit_volume_uom")
@@ -375,8 +416,23 @@ def aggregate_by_product(parsed: list[dict]) -> list[dict]:
             db_vol_f = float(db_vol) if db_vol is not None else None
         except (TypeError, ValueError):
             db_vol_f = None
-        key = (brand, flavour, ctype, db_vol_f, db_uom)
-        groups[key].append(r)
+
+        # Scan the title for any OTHER tracked flavours from the same brand.
+        # If found, the listing counts toward each of them (bundle / multi-flavour
+        # SKUs often list 2+ flavours in one title).
+        title_norm = " " + _norm_text(r.get("title") or "") + " "
+        candidate_flavours = flavours_by_brand.get(brand, set())
+        matched = {f for f in candidate_flavours if _flavour_in_title(f, title_norm)}
+        if primary_flavour:
+            matched.add(primary_flavour)
+        if not matched:
+            matched = {"(no flavour)"}
+        if len(matched) > 1:
+            multi_flavour_expansions += 1
+
+        for flavour in matched:
+            key = (brand, flavour, ctype, db_vol_f, db_uom)
+            groups[key].append(r)
 
     out: list[dict] = []
     for (brand, flavour, ctype, db_vol, db_uom), rows in groups.items():
@@ -605,7 +661,8 @@ def _notes_sheet(wb: Workbook, n_listings: int, brand_filter: str | None) -> Non
         ("", False),
         ("Parser caveats", True),
         ("• Brand + flavour validation happens at scrape time — only listings whose TITLE contains ALL brand tokens AND ALL flavour tokens (case-insensitive) are kept. This filters out off-brand bleed from Shopee's loose-relevance search.", False),
-        ("• Bundle / pack-count regex: 'isi N', 'N pcs/pack/sachet', 'Nx', 'xN', '1 lusin' (=12), 'N lusin' (=N×12), 'renceng N'. No signal → total_units defaults to 1.", False),
+        ("• Bundle / pack-count regex: 'isi N', 'N pcs/pack/sachet', 'Nx', 'xN', '1 lusin' (=12), 'N lusin' (=N×12), 'renceng N'. Volume tokens are STRIPPED before pack-count parsing — so 'isi 220ml' is NOT misread as 220 units (the 220 is volume). Pack count is capped at 100; anything higher is treated as 1 unit (almost certainly mislabeled volume).", False),
+        ("• Multi-flavour expansion: a listing whose title mentions multiple flavours from your tracked set is counted under EACH matching flavour, not just the one its search happened to find. E.g. 'NESCAFE MOCHA CAN. NESCAFE LATTE CAN' contributes to both Mocha and Latte aggregates.", False),
         ("• Volume regex: Nml / N L / Ng / N kg. L→×1000 (ml), kg→×1000 (g). Liquid vs solid never mixed in one aggregate.", False),
         ("• Parsed fields run FRESH each export. Phase 2 will persist them back into ecom_listings so repeated exports are faster and reproducible.", False),
     ]
