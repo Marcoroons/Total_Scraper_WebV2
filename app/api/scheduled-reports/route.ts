@@ -79,6 +79,8 @@ export async function POST(request: NextRequest) {
     project_id?: string;
     recipient_email?: string;
     job_types?: string[];
+    job_ids?: string[];    // NEW: concrete jobs from the current selection —
+                           // schedule sends exactly these, no more filter-drift.
     metrics?: string[];
     date_from?: string | null;
     date_to?: string | null;
@@ -105,6 +107,7 @@ export async function POST(request: NextRequest) {
     created_by:      user.id,
     recipient_email: email,
     job_types:       body.job_types ?? [],
+    job_ids:         body.job_ids ?? [],
     metrics:         body.metrics ?? [],
     date_from:       body.date_from ?? null,
     date_to:         body.date_to ?? null,
@@ -116,9 +119,14 @@ export async function POST(request: NextRequest) {
   };
 
   let { data, error } = await supabase.from("scheduled_reports").insert(row).select().single();
-  // Column-safe: if send_time hasn't been migrated yet, retry without it.
+  // Column-safe: retry without any newly-added columns if the migration
+  // hasn't run yet. Order matters — job_ids is the newest, drop it first.
+  if (error && /job_ids/i.test(error.message)) {
+    const { job_ids: _ji, ...rest } = row;
+    ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
+  }
   if (error && /send_time/i.test(error.message)) {
-    const { send_time: _st, ...rest } = row;
+    const { send_time: _st, job_ids: _ji, ...rest } = row;
     ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

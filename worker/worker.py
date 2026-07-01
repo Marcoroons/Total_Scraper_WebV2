@@ -2516,6 +2516,7 @@ def process_scheduled_report(report):
     rid       = report["id"]
     pid       = report.get("project_id")
     job_types = report.get("job_types") or []
+    job_ids   = report.get("job_ids") or []
     recipient = (report.get("recipient_email") or "").strip()
     freq      = (report.get("frequency") or "once").lower()
     send_time = report.get("send_time") or "09:00"
@@ -2523,21 +2524,60 @@ def process_scheduled_report(report):
     try:
         import pandas as pd, io as _io
         sheets = {}
-        for jt in job_types:
-            for plat in ("Instagram", "TikTok"):
-                jobs = db.get_project_jobs(supabase, pid, platform=plat, job_type=jt)
-                urls = list({j["target_url"] for j in jobs if j.get("target_url")})
+
+        # ── Concrete-job mode (new, preferred) ───────────────────────────
+        # When job_ids is present, send EXACTLY those jobs' data — no filter
+        # drift, no picking up new jobs the user didn't authorise. Groups by
+        # (platform, job_type) so each combo becomes one sheet in the workbook.
+        if job_ids:
+            print(f"   Concrete-job mode: {len(job_ids)} bound job(s)")
+            try:
+                bound_jobs = (
+                    supabase.table("scrape_jobs")
+                    .select("job_id,target_url,kol_username,platform,job_type,status")
+                    .in_("job_id", job_ids)
+                    .execute()
+                    .data or []
+                )
+            except Exception as e:
+                print(f"   ⚠️ Bound-jobs lookup failed: {e}")
+                bound_jobs = []
+            # Group by (platform, job_type)
+            groups: dict = {}
+            for j in bound_jobs:
+                if j.get("status") != "COMPLETED":
+                    continue
+                key = (j.get("platform","Instagram"), j.get("job_type",""))
+                groups.setdefault(key, []).append(j)
+            for (plat, jt), gjobs in groups.items():
+                urls = list({j["target_url"] for j in gjobs if j.get("target_url")})
+                names = [j.get("kol_username","") for j in gjobs if j.get("kol_username")]
                 df_e = pd.DataFrame()
                 if jt == "Specific URLs (Video Stats)" and urls:
                     df_e = pd.DataFrame(db.get_campaign_videos(supabase, plat, urls))
-                elif jt == "Profile Feed (Audit)":
-                    names = [j.get("kol_username","") for j in jobs if j.get("kol_username")]
-                    if names:
-                        df_e = pd.DataFrame(db.get_influencer_profiles(supabase, plat, names))
+                elif jt == "Profile Feed (Audit)" and names:
+                    df_e = pd.DataFrame(db.get_influencer_profiles(supabase, plat, names))
                 elif jt == "Comments (Sentiment)" and urls:
                     df_e = pd.DataFrame(db.get_comments(supabase, plat, urls))
                 if not df_e.empty:
                     sheets[f"{jt.split(' ')[0]}_{plat}"[:31]] = df_e
+        # ── Legacy filter mode (job_ids empty — pre-migration schedules) ─
+        else:
+            for jt in job_types:
+                for plat in ("Instagram", "TikTok", "YouTube"):
+                    jobs = db.get_project_jobs(supabase, pid, platform=plat, job_type=jt)
+                    urls = list({j["target_url"] for j in jobs if j.get("target_url")})
+                    df_e = pd.DataFrame()
+                    if jt == "Specific URLs (Video Stats)" and urls:
+                        df_e = pd.DataFrame(db.get_campaign_videos(supabase, plat, urls))
+                    elif jt == "Profile Feed (Audit)":
+                        names = [j.get("kol_username","") for j in jobs if j.get("kol_username")]
+                        if names:
+                            df_e = pd.DataFrame(db.get_influencer_profiles(supabase, plat, names))
+                    elif jt == "Comments (Sentiment)" and urls:
+                        df_e = pd.DataFrame(db.get_comments(supabase, plat, urls))
+                    if not df_e.empty:
+                        sheets[f"{jt.split(' ')[0]}_{plat}"[:31]] = df_e
 
         if sheets and recipient:
             buf = _io.BytesIO()

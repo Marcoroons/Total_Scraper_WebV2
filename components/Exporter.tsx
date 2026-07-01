@@ -453,16 +453,26 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
       setScheduleMsg({ ok: false, text: "Enter a valid recipient email." });
       return;
     }
+    if (exportableSelected.length === 0) {
+      setScheduleMsg({ ok: false, text: "Select at least one exportable job — the schedule binds to those specific jobs." });
+      return;
+    }
     setScheduling(true);
     try {
       const bounds = presetBounds(preset, custom);
+      // Bind the schedule to the EXACT jobs in the current selection. This
+      // replaces the old filter-based approach where the worker re-queried at
+      // send time and could pick up new jobs the user didn't authorise.
+      const jobIds = exportableSelected.map((j) => j.job_id);
+      const uniqTypes = Array.from(new Set(exportableSelected.map((j) => j.job_type)));
       const res = await fetch("/api/scheduled-reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id:      activeProjectId,
           recipient_email: recipient.trim(),
-          job_types:       fnFilter === "all" ? SCRAPE_FUNCTIONS.map((f) => f.jobType) : [SCRAPE_FUNCTIONS.find((f) => f.key === fnFilter)!.jobType],
+          job_ids:         jobIds,
+          job_types:       uniqTypes,   // still sent so the worker's legacy path stays intact for pre-migration schedules
           metrics:         [],
           date_from:       bounds ? new Date(bounds.from).toISOString() : null,
           date_to:         bounds ? new Date(bounds.to).toISOString() : null,
@@ -475,14 +485,89 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
       if (!res.ok) { setScheduleMsg({ ok: false, text: (data as { error?: string }).error ?? "Failed to schedule." }); return; }
       setScheduleMsg({
         ok: true,
-        text: `Scheduled — ${frequency} at ${sendTime} ICT to ${recipient.trim()}${rescrapeFirst ? " (with rescrape)" : ""}.`,
+        text: `Scheduled — ${exportableSelected.length} job(s) · ${frequency} at ${sendTime} ICT → ${recipient.trim()}${rescrapeFirst ? " (with rescrape)" : ""}.`,
       });
       setRecipient("");
+      // Refresh the panel so the new schedule appears immediately.
+      loadSchedules();
     } catch {
       setScheduleMsg({ ok: false, text: "Network error scheduling report." });
     } finally {
       setScheduling(false);
     }
+  }
+
+  // ── Scheduled emails panel — list + cancel ────────────────────────────────
+  interface ScheduledReport {
+    id: string;
+    recipient_email: string;
+    job_ids?: string[] | null;
+    job_types?: string[] | null;
+    frequency: string;
+    send_time?: string | null;
+    next_run_at?: string | null;
+    rescrape?: boolean | null;
+    active?: boolean | null;
+    created_at?: string | null;
+  }
+  const [schedules, setSchedules] = useState<ScheduledReport[]>([]);
+  const [schedulesLoading, setSchedulesLoading] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  const loadSchedules = useCallback(async () => {
+    if (!activeProjectId) { setSchedules([]); return; }
+    setSchedulesLoading(true);
+    try {
+      const res = await fetch(`/api/scheduled-reports?project_id=${activeProjectId}`);
+      const data = await res.json().catch(() => []);
+      const list = Array.isArray(data) ? (data as ScheduledReport[]) : [];
+      // Only surface still-active schedules; hide anything the worker
+      // deactivated (one-shots that already fired).
+      setSchedules(list.filter((s) => s.active !== false));
+    } catch {
+      setSchedules([]);
+    } finally {
+      setSchedulesLoading(false);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => { loadSchedules(); }, [loadSchedules]);
+
+  async function cancelSchedule(id: string) {
+    if (!confirm("Cancel this scheduled email? It won't fire again.")) return;
+    setCancellingId(id);
+    try {
+      const res = await fetch(`/api/scheduled-reports?id=${id}`, { method: "DELETE" });
+      if (!res.ok) alert("Failed to cancel — try again.");
+      loadSchedules();
+    } catch {
+      alert("Network error cancelling schedule.");
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
+  // Format the "next send" time in ICT so the user sees the same wall clock
+  // they entered. Only the NEXT fire is shown — the worker re-computes the
+  // next occurrence after each fire, so we don't render a series here.
+  function formatNextRun(iso: string | null | undefined): string {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso);
+      const ict = new Date(d.getTime() + 7 * 3600 * 1000);
+      const wk = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][ict.getUTCDay()];
+      const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][ict.getUTCMonth()];
+      const hh = String(ict.getUTCHours()).padStart(2, "0");
+      const mm = String(ict.getUTCMinutes()).padStart(2, "0");
+      return `${wk} ${ict.getUTCDate()} ${mo} · ${hh}:${mm} ICT`;
+    } catch { return iso; }
+  }
+
+  function describeSchedule(s: ScheduledReport): string {
+    const n = s.job_ids?.length ?? 0;
+    const types = (s.job_types ?? []).map((t) => t.split(" ")[0]).join(", ") || "any type";
+    if (n > 0) return `${n} bound job${n === 1 ? "" : "s"} · ${types}`;
+    return `filter mode · ${types}`;   // legacy schedules (pre-migration)
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -943,6 +1028,64 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 <span>{scheduleMsg.text}</span>
               </div>
             )}
+
+            {/* ── Active schedules — one row per active scheduled report.
+                Shows the NEXT fire time (never a future series) + a cancel
+                button so a runaway "every friday forever" can be killed
+                from here without opening Supabase. Legacy filter-mode
+                schedules render with "filter mode" instead of a job count. */}
+            <div className="mt-5 pt-4 border-t border-border">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                  Active schedules
+                </p>
+                <button
+                  type="button"
+                  onClick={loadSchedules}
+                  disabled={schedulesLoading}
+                  title="Refresh"
+                  className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors disabled:opacity-40"
+                >
+                  {schedulesLoading ? <CatSpinner size={12} /> : <RotateCcw className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
+              {schedules.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground italic">
+                  No scheduled emails for this project. Select some jobs above + configure the form to schedule one.
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {schedules.map((s) => (
+                    <li
+                      key={s.id}
+                      className="rounded-lg border border-border px-3 py-2 flex items-start gap-2"
+                      style={{ background: "var(--input)" }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-foreground truncate">{s.recipient_email}</p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {describeSchedule(s)} · <span className="text-foreground">{s.frequency}</span>
+                          {s.rescrape ? " · with rescrape" : ""}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          Next: <span className="text-foreground">{formatNextRun(s.next_run_at)}</span>
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => cancelSchedule(s.id)}
+                        disabled={cancellingId === s.id}
+                        title="Cancel this scheduled email"
+                        className="p-1 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded transition-colors disabled:opacity-40 flex-shrink-0"
+                      >
+                        {cancellingId === s.id ? <CatSpinner size={12} /> : <span className="text-xs font-bold leading-none">×</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
       </div>
     </div>
