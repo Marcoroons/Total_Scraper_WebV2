@@ -36,7 +36,16 @@ INTELLIGENCE_JOB_TYPES = {
 
 try:
     supabase: Client = db.make_client()
-    print("✅ Supabase connected.")
+    # Print the project ref (first component of the Supabase URL) so we can
+    # compare against Vercel's NEXT_PUBLIC_SUPABASE_URL — if they don't match,
+    # the frontend and worker are looking at different databases and every
+    # scheduled_report we insert from Vercel is invisible to the worker.
+    _sb_url = (os.environ.get("SUPABASE_URL", "") or "").strip()
+    try:
+        _project_ref = _sb_url.split("://")[-1].split(".")[0][:24]
+    except Exception:
+        _project_ref = "?"
+    print(f"✅ Supabase connected — project ref: {_project_ref}")
 except RuntimeError as e:
     print(f"🚨 FATAL: {e}"); sys.exit(1)
 
@@ -2860,21 +2869,32 @@ while True:
                 compile_daily_snapshots()
                 os.environ["LAST_COMPILED_DATE"] = today.isoformat()
 
-        # Heartbeat — every ~90s print a line so we can distinguish "worker
-        # alive, nothing due" from "worker dead/restarting". Also counts the
-        # scheduled_reports currently in the table so we can see the queue.
+        # Heartbeat — every ~90s. Prints:
+        #   - due count (active=true AND next_run_at <= now)
+        #   - TOTAL count in the table (irrespective of due/active)
+        # If total=0 but you know rows exist via the SQL editor, the worker
+        # is looking at a different Supabase project than the frontend →
+        # SUPABASE_URL on Railway worker ≠ NEXT_PUBLIC_SUPABASE_URL on Vercel.
         _hb_counter += 1
         if _hb_counter >= _HB_EVERY:
             try:
                 due_now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                due_count = len(
+                due_rows = (
                     supabase.table("scheduled_reports")
-                    .select("id", count="exact")
+                    .select("id,next_run_at,active")
                     .eq("active", True)
                     .lte("next_run_at", due_now_iso)
                     .execute().data or []
                 )
-                print(f"💓 Heartbeat — poll loop alive · {due_count} scheduled_report(s) due right now")
+                all_rows = (
+                    supabase.table("scheduled_reports")
+                    .select("id,active,next_run_at")
+                    .limit(5)
+                    .execute().data or []
+                )
+                print(f"💓 Heartbeat — alive · {len(due_rows)} due / {len(all_rows)} total (first 5) in this DB")
+                for r in all_rows[:3]:
+                    print(f"     · {r.get('id')[:8]} active={r.get('active')} next_run_at={r.get('next_run_at')}")
             except Exception as e:
                 print(f"💓 Heartbeat (query err ignored: {e})")
             _hb_counter = 0
