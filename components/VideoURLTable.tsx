@@ -1,6 +1,7 @@
 "use client";
 
 import type { Platform } from "@/components/PlatformToggle";
+import { parseTabularPaste } from "@/lib/parseTabularPaste";
 
 export interface VideoRow {
   id: string;
@@ -49,43 +50,20 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
 
   function handlePaste(
     e: React.ClipboardEvent<HTMLInputElement>,
-    rowId: string
+    rowId: string,
+    preferredRole: "kol" | "url",
   ) {
     const text = e.clipboardData.getData("text");
     if (!text) return;
-
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const hasSep = text.includes("\t") || text.includes(",");
-    if (lines.length <= 1 && !hasSep) return;
+    const hasSep = text.includes("\t") || text.includes(",") || /\r?\n/.test(text.trim());
+    if (!hasSep) return;   // single cell — let default paste happen
     e.preventDefault();
-
-    // Order-agnostic parsing: after the column swap, users might paste
-    // KOL-first (matching the new visual order) or URL-first (matching how
-    // they've been pasting for months). Detect which token looks like a URL
-    // and assign accordingly. Falls back to URL-first when both/neither look
-    // like URLs (preserves backward compat for ambiguous cases).
-    const looksLikeUrl = (s: string) =>
-      /^https?:\/\//i.test(s) ||
-      /(instagram|tiktok|youtube|youtu\.be)\.[a-z]/i.test(s);
-
-    const parsed: VideoRow[] = lines.map((line) => {
-      const tabIdx = line.indexOf("\t");
-      const commaIdx = line.indexOf(",");
-      const sepIdx = tabIdx !== -1 ? tabIdx : commaIdx;
-      if (sepIdx === -1) {
-        return { id: Math.random().toString(36).slice(2), url: line.trim(), kol: "" };
-      }
-      const a = line.slice(0, sepIdx).trim();
-      const b = line.slice(sepIdx + 1).trim();
-      const aIsUrl = looksLikeUrl(a);
-      const bIsUrl = looksLikeUrl(b);
-      const [url, kol] =
-        aIsUrl && !bIsUrl ? [a, b] :
-        bIsUrl && !aIsUrl ? [b, a] :
-        [a, b];   // ambiguous → URL-first fallback
-      return { id: Math.random().toString(36).slice(2), url, kol };
-    });
-
+    const parsed = parseTabularPaste(text, /* hasRate */ false, preferredRole).map((p) => ({
+      id: Math.random().toString(36).slice(2),
+      url: p.url,
+      kol: p.kol,
+    }));
+    if (parsed.length === 0) return;
     const idx = rows.findIndex((r) => r.id === rowId);
     const spliced = [...rows.slice(0, idx), ...parsed, ...rows.slice(idx + 1)];
     const filtered = spliced.filter((r) => r.url || r.kol);
@@ -110,6 +88,7 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
             type="text"
             value={row.kol}
             onChange={(e) => update(row.id, "kol", e.target.value)}
+            onPaste={(e) => handlePaste(e, row.id, "kol")}
             placeholder={kolPlaceholder}
             className="px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
@@ -117,7 +96,7 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
             type="text"
             value={row.url}
             onChange={(e) => update(row.id, "url", e.target.value)}
-            onPaste={(e) => handlePaste(e, row.id)}
+            onPaste={(e) => handlePaste(e, row.id, "url")}
             placeholder={urlPlaceholder}
             className={inputCls}
           />

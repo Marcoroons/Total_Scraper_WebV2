@@ -3,6 +3,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import type { Platform } from "@/components/PlatformToggle";
 import { cleanRateInput, formatRateDisplay } from "@/lib/formatRate";
+import { parseTabularPaste } from "@/lib/parseTabularPaste";
 
 export interface URLRow {
   id: string;
@@ -50,23 +51,34 @@ const inputCls =
 export function URLDataTable({ rows, onChange, includeRate, platform = "Instagram" }: URLDataTableProps) {
   const urlPlaceholder = URL_PLACEHOLDER[platform];
   const kolPlaceholder = KOL_PLACEHOLDER[platform];
-  function handleUrlPaste(e: React.ClipboardEvent<HTMLInputElement>, rowId: string) {
+
+  // Shared paste handler for both the KOL and URL inputs. Detects clipboard
+  // shape (single value / multi-line / tab-separated / comma-separated) and
+  // dispatches to `parseTabularPaste`. `preferredRole` biases single-value
+  // lines to KOL when pasting into the KOL box, URL when pasting into URL.
+  // If nothing multi-cellular is detected, we let the browser default paste
+  // fire so single-value input still works normally.
+  function handleTabularPaste(
+    e: React.ClipboardEvent<HTMLInputElement>,
+    rowId: string,
+    preferredRole: "kol" | "url",
+  ) {
     const text = e.clipboardData.getData("text");
-    const lines = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (lines.length > 1) {
-      e.preventDefault();
-      const existing = rows.filter((r) => r.id !== rowId && r.url.trim());
-      const pasted: URLRow[] = lines.map((line) => ({
-        id: Math.random().toString(36).slice(2),
-        url: line,
-        kol: "",
-        rate: "",
-      }));
-      onChange([...existing, ...pasted]);
-    }
+    const hasSep = text.includes("\t") || text.includes(",") || /\r?\n/.test(text.trim());
+    if (!hasSep) return;   // single cell — default paste behaviour
+    e.preventDefault();
+    const parsed = parseTabularPaste(text, includeRate, preferredRole);
+    if (parsed.length === 0) return;
+    const existing = rows.filter(
+      (r) => r.id !== rowId && (r.url.trim() || r.kol.trim() || r.rate.trim()),
+    );
+    const newRows: URLRow[] = parsed.map((p) => ({
+      id: Math.random().toString(36).slice(2),
+      url:  p.url,
+      kol:  p.kol,
+      rate: p.rate,
+    }));
+    onChange([...existing, ...newRows]);
   }
 
   function addRow() {
@@ -106,6 +118,7 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
               type="text"
               value={row.kol}
               onChange={(e) => onChange(update(rows, row.id, { kol: e.target.value }))}
+              onPaste={(e) => handleTabularPaste(e, row.id, "kol")}
               placeholder={kolPlaceholder}
               className={inputCls}
             />
@@ -113,7 +126,7 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
               type="url"
               value={row.url}
               onChange={(e) => onChange(update(rows, row.id, { url: e.target.value }))}
-              onPaste={(e) => handleUrlPaste(e, row.id)}
+              onPaste={(e) => handleTabularPaste(e, row.id, "url")}
               placeholder={urlPlaceholder}
               className={inputCls}
             />
