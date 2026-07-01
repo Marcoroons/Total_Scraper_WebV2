@@ -2780,10 +2780,9 @@ print(f"\n🚀 Worker online — polling every 3s | Competitor Intelligence: "
 last_compiled = None
 last_gen_reports_sweep = 0.0   # Feature B: purge expired saved reports (hourly)
 
-# One-time startup cleanup: pre-2026-06-30 fired one-shots were deactivated
-# (active=false) rather than deleted. New code deletes on fire, so the only
-# way `active=false` rows now exist is legacy leftovers. Purge them here so
-# the transition is clean without needing a manual SQL sweep.
+# One-time startup cleanup + proof of life. We ALWAYS print the result now
+# (was previously silent when there was nothing to purge) so the Railway logs
+# clearly show the worker made it past bootstrap and into the poll loop.
 try:
     stale = (
         supabase.table("scheduled_reports")
@@ -2791,10 +2790,14 @@ try:
         .eq("active", False)
         .execute().data or []
     )
-    if stale:
-        print(f"🗑️ Startup: purged {len(stale)} legacy fired one-shot(s)")
+    print(f"🗑️ Startup: purged {len(stale)} legacy fired one-shot(s)")
 except Exception as e:
     print(f"⚠️ Startup one-shot purge skipped: {e}")
+
+# Heartbeat state — every N polls print a line so we can tell from Railway
+# logs whether the worker is alive but idle vs. dead. Cheap and diagnostic.
+_hb_counter = 0
+_HB_EVERY = 30   # 30 polls × 3s = ~90s between heartbeats
 
 
 def sweep_expired_generated_reports():
@@ -2856,6 +2859,25 @@ while True:
             if os.environ.get("LAST_COMPILED_DATE") != today.isoformat():
                 compile_daily_snapshots()
                 os.environ["LAST_COMPILED_DATE"] = today.isoformat()
+
+        # Heartbeat — every ~90s print a line so we can distinguish "worker
+        # alive, nothing due" from "worker dead/restarting". Also counts the
+        # scheduled_reports currently in the table so we can see the queue.
+        _hb_counter += 1
+        if _hb_counter >= _HB_EVERY:
+            try:
+                due_now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                due_count = len(
+                    supabase.table("scheduled_reports")
+                    .select("id", count="exact")
+                    .eq("active", True)
+                    .lte("next_run_at", due_now_iso)
+                    .execute().data or []
+                )
+                print(f"💓 Heartbeat — poll loop alive · {due_count} scheduled_report(s) due right now")
+            except Exception as e:
+                print(f"💓 Heartbeat (query err ignored: {e})")
+            _hb_counter = 0
 
         time.sleep(3)
     except Exception as e:
