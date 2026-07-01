@@ -14,6 +14,7 @@ import {
 } from "@/lib/exportConfig";
 import { CALC_METRICS } from "@/components/MetricsSelector";
 import { ExportPreview } from "@/components/ExportPreview";
+import { cleanRateInput, formatRateDisplay } from "@/lib/formatRate";
 
 // ─── Date range presets ───────────────────────────────────────────────────────
 
@@ -698,8 +699,9 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 {profileKols.map((k) => (
                   <div key={k} className="flex items-center gap-2">
                     <span className="text-xs text-foreground flex-1 truncate">@{k}</span>
-                    <input type="number" min={0} step="0.01" value={rates[k] ?? ""}
-                      onChange={(e) => setRates((r) => ({ ...r, [k]: e.target.value }))}
+                    <input type="text" inputMode="decimal"
+                      value={formatRateDisplay(rates[k] ?? "")}
+                      onChange={(e) => setRates((r) => ({ ...r, [k]: cleanRateInput(e.target.value) }))}
                       placeholder="0.00"
                       className="w-28 px-2 py-1 text-xs rounded-lg bg-card border border-border text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
                   </div>

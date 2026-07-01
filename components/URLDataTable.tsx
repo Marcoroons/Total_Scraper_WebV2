@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import type { Platform } from "@/components/PlatformToggle";
+import { cleanRateInput, formatRateDisplay } from "@/lib/formatRate";
 
 export interface URLRow {
   id: string;
@@ -39,6 +40,9 @@ function makeRow(): URLRow {
 function update(rows: URLRow[], id: string, patch: Partial<URLRow>): URLRow[] {
   return rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
 }
+
+// Rate formatting helpers live in lib/formatRate.ts — shared with the
+// Exporter's per-KOL CPV rate input so both fields behave identically.
 
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
@@ -114,11 +118,10 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
             />
             {includeRate && (
               <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={row.rate}
-                onChange={(e) => onChange(update(rows, row.id, { rate: e.target.value }))}
+                type="text"
+                inputMode="decimal"
+                value={formatRateDisplay(row.rate)}
+                onChange={(e) => onChange(update(rows, row.id, { rate: cleanRateInput(e.target.value) }))}
                 placeholder="0.00"
                 className={inputCls}
               />
