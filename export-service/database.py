@@ -113,22 +113,33 @@ def insert_jobs(supabase, rows: list[dict]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SCRAPED DATA  (ig / tiktok tables)
+# SCRAPED DATA  (ig / tiktok / youtube tables)
 # ─────────────────────────────────────────────────────────────────────────────
+# Platform → table-prefix mapping. Mirrors worker/database.py. Previously the
+# export-service had a binary `pfx = "ig" if IG else "tiktok"` fallback which
+# routed YouTube queries into tiktok_campaign_videos — returning 0 rows every
+# time and 404ing every YouTube export.
+_PFX = {"Instagram": "ig", "TikTok": "tiktok", "YouTube": "youtube"}
+
+
+def _pfx(platform: str) -> str:
+    return _PFX.get(platform, "ig")
+
+
 def upsert_campaign_videos(supabase, platform: str, rows: list[dict]) -> None:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     if rows:
         supabase.table(f"{pfx}_campaign_videos").upsert(rows, on_conflict="video_url").execute()
 
 
 def upsert_influencer_profiles(supabase, platform: str, rows: list[dict]) -> None:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     if rows:
         supabase.table(f"{pfx}_influencer_profiles").upsert(rows, on_conflict="username,post_url").execute()
 
 
 def upsert_comments(supabase, platform: str, rows: list[dict]) -> None:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     if rows:
         supabase.table(f"{pfx}_comments").upsert(
             rows, on_conflict="video_url,commenter_username,comment_text"
@@ -141,7 +152,7 @@ def upsert_trend_discovery(supabase, rows: list[dict]) -> None:
 
 
 def get_campaign_videos(supabase, platform: str, urls: list[str]) -> list[dict]:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     return (
         supabase.table(f"{pfx}_campaign_videos")
         .select("*").in_("video_url", urls).execute().data or []
@@ -149,7 +160,7 @@ def get_campaign_videos(supabase, platform: str, urls: list[str]) -> list[dict]:
 
 
 def get_influencer_profiles(supabase, platform: str, usernames: list[str]) -> list[dict]:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     return (
         supabase.table(f"{pfx}_influencer_profiles")
         .select("*").in_("username", usernames).execute().data or []
@@ -157,7 +168,7 @@ def get_influencer_profiles(supabase, platform: str, usernames: list[str]) -> li
 
 
 def get_comments(supabase, platform: str, video_urls: list[str]) -> list[dict]:
-    pfx = "ig" if platform == "Instagram" else "tiktok"
+    pfx = _pfx(platform)
     return (
         supabase.table(f"{pfx}_comments")
         .select("*").in_("video_url", video_urls).execute().data or []
