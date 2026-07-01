@@ -445,6 +445,157 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     finally { setRescraping(null); }
   }
 
+  // ── Feature B: Generate & save ─────────────────────────────────────────
+  // Same export pipeline as download, but instead of streaming the xlsx
+  // to the browser we send it to /api/generated-reports, which forwards
+  // to the export-service, uploads the xlsx to Supabase Storage, and
+  // records a metadata row. The Saved reports panel then lists it with
+  // download/delete/email actions.
+  interface GeneratedReport {
+    id: string;
+    filename: string;
+    file_size_bytes: number | null;
+    job_ids: string[] | null;
+    job_types: string[] | null;
+    platforms: string[] | null;
+    expires_at: string;
+    created_at: string;
+  }
+  const [savedReports, setSavedReports] = useState<GeneratedReport[]>([]);
+  const [savedLoading, setSavedLoading]  = useState(false);
+  const [generating, setGenerating]      = useState<{ done: number; total: number } | null>(null);
+  const [deletingReportId, setDeletingReportId] = useState<string | null>(null);
+  const [emailingReportId, setEmailingReportId] = useState<string | null>(null);
+  const [selectedSavedReportId, setSelectedSavedReportId] = useState<string>("");   // for schedule attach
+
+  const loadSavedReports = useCallback(async () => {
+    if (!activeProjectId) { setSavedReports([]); return; }
+    setSavedLoading(true);
+    try {
+      const res = await fetch(`/api/generated-reports?project_id=${activeProjectId}`);
+      const data = await res.json().catch(() => []);
+      setSavedReports(Array.isArray(data) ? (data as GeneratedReport[]) : []);
+    } catch {
+      setSavedReports([]);
+    } finally {
+      setSavedLoading(false);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => { loadSavedReports(); }, [loadSavedReports]);
+
+  async function handleGenerateAndSave() {
+    if (exportGroups.length === 0) return;
+    const rateNums: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rates)) {
+      const n = parseFloat(v);
+      if (Number.isFinite(n) && n > 0) rateNums[k] = n;
+    }
+    setGenerating({ done: 0, total: exportGroups.length });
+    let failures = 0;
+    const failureDetails: string[] = [];
+    for (let i = 0; i < exportGroups.length; i++) {
+      const group = exportGroups[i];
+      const endpoint = EXPORT_ENDPOINTS[group[0].job_type];
+      const cleanCustom = customFilename.trim().replace(/[/\\?%*:|"<>]/g, "").replace(/\.xlsx$/i, "");
+      const filename = cleanCustom
+        ? (exportGroups.length > 1 ? `${cleanCustom}-${i + 1}.xlsx` : `${cleanCustom}.xlsx`)
+        : batchExportFilename(group[0], group.length);
+      try {
+        const res = await fetch("/api/generated-reports", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...buildBatchExportPayload(group, endpoint, { sortBy, inclTop5, inclBot5, calcMetrics, rawMetrics, rates: rateNums, layout }),
+            endpoint,
+            project_id: group[0].project_id,
+            display_filename: filename,
+            job_ids: group.map((j) => j.job_id),
+            job_types: Array.from(new Set(group.map((j) => j.job_type))),
+            platforms: Array.from(new Set(group.map((j) => j.platform))),
+          }),
+        });
+        if (!res.ok) {
+          failures++;
+          let detail = `${group[0].platform} · ${group[0].job_type}: HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            const msg = (body as { error?: string }).error;
+            if (msg) detail = `${group[0].platform} · ${group[0].job_type}: ${msg}`;
+          } catch { /* keep generic */ }
+          failureDetails.push(detail);
+        }
+      } catch (e) {
+        failures++;
+        failureDetails.push(`${group[0].platform} · ${group[0].job_type}: ${e instanceof Error ? e.message : "network error"}`);
+      }
+      setGenerating({ done: i + 1, total: exportGroups.length });
+    }
+    setGenerating(null);
+    loadSavedReports();
+    if (failures > 0) {
+      alert(`${failures} of ${exportGroups.length} save(s) failed:\n\n${failureDetails.join("\n")}`);
+    }
+  }
+
+  async function downloadSavedReport(id: string) {
+    try {
+      const res = await fetch(`/api/generated-reports/${id}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert((data as { error?: string }).error ?? "Download failed"); return; }
+      const url = (data as { url?: string }).url;
+      if (!url) { alert("Signed URL missing from response."); return; }
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (data as { filename?: string }).filename ?? "report.xlsx";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Download error");
+    }
+  }
+
+  async function deleteSavedReport(id: string) {
+    if (!confirm("Delete this saved report? The xlsx will be removed from storage.")) return;
+    setDeletingReportId(id);
+    try {
+      const res = await fetch(`/api/generated-reports/${id}`, { method: "DELETE" });
+      if (!res.ok) alert("Delete failed.");
+      loadSavedReports();
+      if (selectedSavedReportId === id) setSelectedSavedReportId("");
+    } finally {
+      setDeletingReportId(null);
+    }
+  }
+
+  async function emailSavedReportNow(id: string) {
+    const to = prompt("Send this saved report to which email address?");
+    if (!to) return;
+    setEmailingReportId(id);
+    try {
+      const res = await fetch(`/api/generated-reports/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient_email: to }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert((data as { error?: string }).error ?? "Email queue failed.");
+      else alert((data as { message?: string }).message ?? "Queued.");
+    } finally {
+      setEmailingReportId(null);
+    }
+  }
+
+  function formatBytes(n: number | null | undefined): string {
+    const v = Number(n) || 0;
+    if (v > 1_048_576) return `${(v / 1_048_576).toFixed(1)} MB`;
+    if (v > 1024)      return `${(v / 1024).toFixed(1)} KB`;
+    return `${v} B`;
+  }
+  function formatExpiresIn(iso: string): string {
+    const days = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 86400000));
+    return days === 0 ? "expires today" : `expires in ${days}d`;
+  }
+
   // ── Schedule email ─────────────────────────────────────────────────────────
   async function handleSchedule() {
     if (!activeProjectId) return;
@@ -453,32 +604,35 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
       setScheduleMsg({ ok: false, text: "Enter a valid recipient email." });
       return;
     }
-    if (exportableSelected.length === 0) {
-      setScheduleMsg({ ok: false, text: "Select at least one exportable job — the schedule binds to those specific jobs." });
+    // Schedule flow accepts EITHER a saved-report attachment OR a job
+    // selection. Attaching a saved report short-circuits the whole
+    // regenerate-at-send-time pipeline — the worker just downloads +
+    // emails the pinned file. Otherwise, we bind to the current selection
+    // (same as Feature A's concrete-job flow).
+    if (!selectedSavedReportId && exportableSelected.length === 0) {
+      setScheduleMsg({ ok: false, text: "Attach a saved report OR select jobs — schedules need something to send." });
       return;
     }
     setScheduling(true);
     try {
       const bounds = presetBounds(preset, custom);
-      // Bind the schedule to the EXACT jobs in the current selection. This
-      // replaces the old filter-based approach where the worker re-queried at
-      // send time and could pick up new jobs the user didn't authorise.
       const jobIds = exportableSelected.map((j) => j.job_id);
       const uniqTypes = Array.from(new Set(exportableSelected.map((j) => j.job_type)));
       const res = await fetch("/api/scheduled-reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          project_id:      activeProjectId,
-          recipient_email: recipient.trim(),
-          job_ids:         jobIds,
-          job_types:       uniqTypes,   // still sent so the worker's legacy path stays intact for pre-migration schedules
-          metrics:         [],
-          date_from:       bounds ? new Date(bounds.from).toISOString() : null,
-          date_to:         bounds ? new Date(bounds.to).toISOString() : null,
+          project_id:          activeProjectId,
+          recipient_email:     recipient.trim(),
+          generated_report_id: selectedSavedReportId || undefined,
+          job_ids:             jobIds,
+          job_types:           uniqTypes,
+          metrics:             [],
+          date_from:           bounds ? new Date(bounds.from).toISOString() : null,
+          date_to:             bounds ? new Date(bounds.to).toISOString() : null,
           frequency,
-          send_time:       sendTime,
-          rescrape:        rescrapeFirst,
+          send_time:           sendTime,
+          rescrape:            rescrapeFirst,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -966,6 +1120,78 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
                 ? <><CatSpinner size={16} /> Exporting {exporting.done}/{exporting.total}…</>
                 : <><Download className="w-4 h-4" /> Export &amp; download ({exportableSelected.length} job{exportableSelected.length !== 1 ? "s" : ""}{exportGroups.length > 1 ? ` → ${exportGroups.length} files` : ""})</>}
             </button>
+
+            {/* Generate & save — same pipeline, saves to Supabase Storage
+                instead of downloading. Shows up in the Saved reports panel
+                below with download / delete / email actions. */}
+            <button
+              type="button"
+              onClick={handleGenerateAndSave}
+              disabled={exportGroups.length === 0 || generating !== null}
+              className="mt-2 w-full py-2.5 text-sm font-medium rounded-xl border flex items-center justify-center gap-2 transition-colors hover:bg-primary/10 disabled:opacity-40"
+              style={{ borderColor: "rgba(0,201,255,0.35)", color: "#00c9ff" }}
+              title="Generate the same xlsx and save it to Supabase Storage — appears in the Saved reports panel below"
+            >
+              {generating
+                ? <><CatSpinner size={14} /> Saving {generating.done}/{generating.total}…</>
+                : <>💾 Generate &amp; save ({exportableSelected.length} job{exportableSelected.length !== 1 ? "s" : ""})</>}
+            </button>
+
+            {/* ── Saved reports panel ── Feature B: files generated via
+                "Generate & save" land here. Each row has download,
+                delete, and "Email now" actions. Auto-purges after 7d. */}
+            <div className="mt-4 pt-4 border-t border-border">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                  Saved reports
+                </p>
+                <button type="button" onClick={loadSavedReports} disabled={savedLoading}
+                  title="Refresh"
+                  className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors disabled:opacity-40">
+                  {savedLoading ? <CatSpinner size={12} /> : <RotateCcw className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              {savedReports.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground italic">
+                  No saved reports yet. Use <span className="text-foreground">Generate &amp; save</span> above to create one.
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {savedReports.map((r) => (
+                    <li key={r.id} className="rounded-lg border border-border px-3 py-2 flex items-start gap-2"
+                      style={{ background: "var(--input)" }}>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-foreground truncate">{r.filename}</p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {formatBytes(r.file_size_bytes)} · {r.job_ids?.length ?? 0} job{(r.job_ids?.length ?? 0) === 1 ? "" : "s"}
+                          {r.platforms && r.platforms.length > 0 ? ` · ${r.platforms.join(", ")}` : ""}
+                          {" · "}<span className="text-yellow-400">{formatExpiresIn(r.expires_at)}</span>
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button type="button" onClick={() => downloadSavedReport(r.id)}
+                          title="Download"
+                          className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors">
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                        <button type="button" onClick={() => emailSavedReportNow(r.id)}
+                          disabled={emailingReportId === r.id}
+                          title="Email this file now"
+                          className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors disabled:opacity-40">
+                          {emailingReportId === r.id ? <CatSpinner size={12} /> : <Send className="w-3.5 h-3.5" />}
+                        </button>
+                        <button type="button" onClick={() => deleteSavedReport(r.id)}
+                          disabled={deletingReportId === r.id}
+                          title="Delete"
+                          className="p-1 text-muted-foreground hover:text-red-400 hover:bg-red-500/10 rounded transition-colors disabled:opacity-40">
+                          {deletingReportId === r.id ? <CatSpinner size={12} /> : <span className="text-sm leading-none">×</span>}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
 
           {/* Schedule email */}
@@ -974,6 +1200,24 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
               <Mail className="w-4 h-4" style={{ color: "#00c9ff" }} />
               <p className="text-sm font-medium text-foreground">Schedule email delivery</p>
             </div>
+
+            {/* Attach saved report (optional) — when set, the schedule
+                emails the pinned file without regenerating anything at
+                fire time. Overrides the selection-based binding. */}
+            {savedReports.length > 0 && (
+              <>
+                <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Attach saved report <span className="normal-case tracking-normal">(optional — overrides job selection)</span>
+                </label>
+                <select value={selectedSavedReportId} onChange={(e) => setSelectedSavedReportId(e.target.value)}
+                  className={`${selectCls} w-full mb-3`}>
+                  <option value="">— send the selected jobs (default)</option>
+                  {savedReports.map((r) => (
+                    <option key={r.id} value={r.id}>{r.filename} · {formatBytes(r.file_size_bytes)}</option>
+                  ))}
+                </select>
+              </>
+            )}
 
             <label className="block text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">Recipient</label>
             <input

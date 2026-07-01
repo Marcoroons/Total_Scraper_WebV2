@@ -2517,10 +2517,56 @@ def process_scheduled_report(report):
     pid       = report.get("project_id")
     job_types = report.get("job_types") or []
     job_ids   = report.get("job_ids") or []
+    gen_id    = report.get("generated_report_id")   # Feature B: saved-file mode
     recipient = (report.get("recipient_email") or "").strip()
     freq      = (report.get("frequency") or "once").lower()
     send_time = report.get("send_time") or "09:00"
     print(f"\n📧 Scheduled report {rid} → {recipient} ({freq} @ {send_time} ICT)")
+
+    # ── Saved-file mode (Feature B) ─────────────────────────────────────
+    # If the schedule is bound to a pre-generated report, skip the whole
+    # regenerate-from-scratch pipeline: download the xlsx from Supabase
+    # Storage + email it directly. Rescrape flag is ignored in this mode
+    # (there's nothing to rescrape — the file's already fixed).
+    if gen_id and recipient:
+        try:
+            gen_row = (
+                supabase.table("generated_reports")
+                .select("filename,storage_path")
+                .eq("id", gen_id).single().execute().data
+            )
+            if not gen_row:
+                raise RuntimeError(f"generated_report {gen_id} not found (deleted?)")
+            path = gen_row["storage_path"]
+            print(f"   Saved-file mode: downloading {path}")
+            file_bytes = supabase.storage.from_("generated-reports").download(path)
+            if not file_bytes:
+                raise RuntimeError(f"Storage returned empty bytes for {path}")
+            bot = os.environ.get("BOT_EMAIL","").strip()
+            msg = EmailMessage()
+            msg["Subject"] = f"📊 Total Scraper — {gen_row.get('filename') or 'report'}"
+            msg["From"]    = f"Total Scraper <{bot}>"
+            msg["To"]      = recipient
+            msg.set_content("Your saved Total Scraper report is attached.")
+            msg.add_attachment(
+                file_bytes, maintype="application",
+                subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=gen_row.get("filename") or "report.xlsx",
+            )
+            dispatch_email(msg)
+            print(f"✅ Scheduled report {rid} sent (saved file, {len(file_bytes)} bytes).")
+        except Exception as e:
+            print(f"🚨 Scheduled report {rid} (saved-file mode): {e}")
+        # Always advance/deactivate — no busy-loop on failure.
+        try:
+            if freq == "once":
+                db.advance_scheduled_report(supabase, rid, deactivate=True)
+            else:
+                db.advance_scheduled_report(supabase, rid, next_run_iso=_next_run_ict(freq, send_time))
+        except Exception as e:
+            print(f"🚨 Scheduled report {rid} advance failed: {e}")
+        return
+
     try:
         import pandas as pd, io as _io
         sheets = {}
@@ -2724,21 +2770,62 @@ def compile_daily_snapshots():
 print(f"\n🚀 Worker online — polling every 3s | Competitor Intelligence: "
       f"{'ON' if ENABLE_INTELLIGENCE else 'OFF (set ENABLE_INTELLIGENCE=true to enable)'}")
 last_compiled = None
+last_gen_reports_sweep = 0.0   # Feature B: purge expired saved reports (hourly)
+
+
+def sweep_expired_generated_reports():
+    """Delete Storage files + DB rows for generated_reports past their
+    expires_at. Keeps the `generated-reports` bucket bounded so it doesn't
+    grow forever. Silently skips if the table hasn't been migrated yet."""
+    try:
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        expired = (
+            supabase.table("generated_reports")
+            .select("id,storage_path")
+            .lt("expires_at", now_iso)
+            .limit(50).execute().data or []
+        )
+        if not expired:
+            return
+        print(f"🧹 Purging {len(expired)} expired generated_report(s)")
+        paths = [r["storage_path"] for r in expired if r.get("storage_path")]
+        if paths:
+            try:
+                supabase.storage.from_("generated-reports").remove(paths)
+            except Exception as e:
+                print(f"   ⚠️ Storage sweep skipped: {e}")
+        ids = [r["id"] for r in expired]
+        supabase.table("generated_reports").delete().in_("id", ids).execute()
+    except Exception as e:
+        msg = str(e).lower()
+        if "generated_reports" in msg or "pgrst" in msg:
+            # Migration hasn't run yet — quietly ignore.
+            return
+        print(f"   ⚠️ Generated-reports sweep err: {e}")
+
 
 while True:
     try:
         pending = db.get_pending_jobs(supabase, limit=1)
         if pending: process_job(pending[0]); continue
-        
+
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         emails  = db.get_due_scheduled_emails(supabase, now_iso)
         if emails: process_scheduled_email(emails[0]); continue
-        
+
         autos = db.get_due_automations(supabase, now_iso)
         if autos: process_automation(autos[0]); continue
 
         reports = db.get_due_scheduled_reports(supabase, now_iso)
         if reports: process_scheduled_report(reports[0]); continue
+
+        # Hourly sweep for expired saved reports (Feature B — keeps the
+        # generated-reports bucket bounded). Timestamped so we don't hammer
+        # the DB every 3-second poll.
+        _now = time.time()
+        if _now - last_gen_reports_sweep > 3600:
+            sweep_expired_generated_reports()
+            last_gen_reports_sweep = _now
 
         if ENABLE_INTELLIGENCE:
             today = datetime.date.today()

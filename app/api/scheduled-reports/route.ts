@@ -79,8 +79,8 @@ export async function POST(request: NextRequest) {
     project_id?: string;
     recipient_email?: string;
     job_types?: string[];
-    job_ids?: string[];    // NEW: concrete jobs from the current selection —
-                           // schedule sends exactly these, no more filter-drift.
+    job_ids?: string[];             // concrete jobs from selection (Feature A)
+    generated_report_id?: string;   // pin a pre-generated saved xlsx (Feature B) — worker emails the file without regenerating
     metrics?: string[];
     date_from?: string | null;
     date_to?: string | null;
@@ -103,30 +103,36 @@ export async function POST(request: NextRequest) {
   const sendTime  = /^\d{1,2}:\d{2}$/.test(body.send_time ?? "") ? body.send_time! : "09:00";
 
   const row = {
-    project_id:      body.project_id,
-    created_by:      user.id,
-    recipient_email: email,
-    job_types:       body.job_types ?? [],
-    job_ids:         body.job_ids ?? [],
-    metrics:         body.metrics ?? [],
-    date_from:       body.date_from ?? null,
-    date_to:         body.date_to ?? null,
+    project_id:          body.project_id,
+    created_by:          user.id,
+    recipient_email:     email,
+    job_types:           body.job_types ?? [],
+    job_ids:             body.job_ids ?? [],
+    generated_report_id: body.generated_report_id ?? null,
+    metrics:             body.metrics ?? [],
+    date_from:           body.date_from ?? null,
+    date_to:             body.date_to ?? null,
     frequency,
-    rescrape:        !!body.rescrape,
-    active:          true,
-    send_time:       sendTime,
-    next_run_at:     nextRunICT(frequency, sendTime),
+    rescrape:            !!body.rescrape,
+    active:              true,
+    send_time:           sendTime,
+    next_run_at:         nextRunICT(frequency, sendTime),
   };
 
   let { data, error } = await supabase.from("scheduled_reports").insert(row).select().single();
-  // Column-safe: retry without any newly-added columns if the migration
-  // hasn't run yet. Order matters — job_ids is the newest, drop it first.
+  // Column-safe: retry stripping any newly-added columns the DB doesn't
+  // recognise yet. Cascading from newest → oldest so a partial migration
+  // still saves the row.
+  if (error && /generated_report_id/i.test(error.message)) {
+    const { generated_report_id: _gr, ...rest } = row;
+    ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
+  }
   if (error && /job_ids/i.test(error.message)) {
-    const { job_ids: _ji, ...rest } = row;
+    const { job_ids: _ji, generated_report_id: _gr, ...rest } = row;
     ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
   }
   if (error && /send_time/i.test(error.message)) {
-    const { send_time: _st, job_ids: _ji, ...rest } = row;
+    const { send_time: _st, job_ids: _ji, generated_report_id: _gr, ...rest } = row;
     ({ data, error } = await supabase.from("scheduled_reports").insert(rest).select().single());
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
