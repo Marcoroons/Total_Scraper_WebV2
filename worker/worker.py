@@ -151,9 +151,17 @@ YT = {"video_stats":"streamers/youtube-scraper",
 def dispatch_email(msg):
     bot = os.environ.get("BOT_EMAIL","").strip()
     pw  = os.environ.get("BOT_APP_PASSWORD","").strip()
-    if not bot or not pw: raise Exception("BOT_EMAIL/BOT_APP_PASSWORD missing")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(bot, pw); s.send_message(msg)
+    if not bot or not pw:
+        raise Exception("BOT_EMAIL/BOT_APP_PASSWORD missing on the worker service")
+    # Granular prints + explicit timeout so a hang can't lock the worker on
+    # SMTP forever (Gmail can take 30-60s to time out silently without one).
+    print(f"   ✉️  SMTP connect smtp.gmail.com:465 …")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as s:
+        print(f"   ✉️  SMTP login as {bot} …")
+        s.login(bot, pw)
+        print(f"   ✉️  SMTP send to {msg['To']} …")
+        s.send_message(msg)
+        print(f"   ✉️  SMTP OK")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXTRACTION LAYER INTEGRATIONS
@@ -2530,7 +2538,13 @@ def process_scheduled_report(report):
     recipient = (report.get("recipient_email") or "").strip()
     freq      = (report.get("frequency") or "once").lower()
     send_time = report.get("send_time") or "09:00"
-    print(f"\n📧 Scheduled report {rid} → {recipient} ({freq} @ {send_time} ICT)")
+    # `once` schedules fire from `next_run_at` (which "Email now" sets to
+    # now-5s), NOT from `send_time`. Print the send_time only for recurring
+    # so the log stops implying a one-shot got scheduled 8 hours out.
+    if freq == "once":
+        print(f"\n📧 Scheduled report {rid} → {recipient} (once — firing immediately)")
+    else:
+        print(f"\n📧 Scheduled report {rid} → {recipient} ({freq} @ {send_time} ICT)")
 
     # ── Saved-file mode (Feature B) ─────────────────────────────────────
     # If the schedule is bound to a pre-generated report, skip the whole
