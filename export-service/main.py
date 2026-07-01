@@ -204,11 +204,19 @@ def export_video_stats(req: VideoStatsRequest):
     # Expand to canonical-URL variants so we find rows scraped before the
     # worker started preserving target-URL form (old rows have www.youtube.com
     # without tracking params; new rows have whatever the user pasted).
-    rows = get_campaign_videos(supabase, req.platform, _expand_url_variants(req.video_urls))
+    queried_urls = _expand_url_variants(req.video_urls)
+    print(f"[export/video-stats] platform={req.platform} querying {len(queried_urls)} URL variant(s): {queried_urls[:5]}")
+    rows = get_campaign_videos(supabase, req.platform, queried_urls)
+    print(f"[export/video-stats] -> {len(rows)} row(s) matched")
     if not rows:
+        # Diagnostic detail: show the exact URLs we searched for so the
+        # frontend alert / Railway logs pinpoint the mismatch immediately
+        # (rather than the generic "may still be processing" hand-wave).
+        preview = "; ".join(queried_urls[:3]) + (f" (+{len(queried_urls) - 3} more)" if len(queried_urls) > 3 else "")
         raise HTTPException(
             status_code=404,
-            detail="No video data found. The job may still be processing.",
+            detail=(f"No {req.platform} video rows matched. Searched {len(queried_urls)} URL variant(s): "
+                    f"{preview}. Compare against `SELECT video_url FROM {'youtube' if req.platform == 'YouTube' else 'ig' if req.platform == 'Instagram' else 'tiktok'}_campaign_videos` in Supabase."),
         )
     df = pd.DataFrame(rows)
     buf = generate_video_stats_excel(df, is_tiktok=(req.platform == "TikTok"), calc_metrics=req.calc_metrics, raw_metrics=req.raw_metrics)
@@ -261,7 +269,10 @@ def export_nlp(req: NLPRequest):
     # Same URL-variants expansion as video-stats — comments rows can have
     # either canonical or pasted-form video_url depending on when they were
     # scraped.
-    rows = get_comments(supabase, req.platform, _expand_url_variants(req.video_urls))
+    queried_urls = _expand_url_variants(req.video_urls)
+    print(f"[export/nlp] platform={req.platform} querying {len(queried_urls)} URL variant(s): {queried_urls[:5]}")
+    rows = get_comments(supabase, req.platform, queried_urls)
+    print(f"[export/nlp] -> {len(rows)} row(s) matched")
     if not rows:
         raise HTTPException(
             status_code=404,
