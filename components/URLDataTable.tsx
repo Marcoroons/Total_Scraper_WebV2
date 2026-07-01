@@ -3,7 +3,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import type { Platform } from "@/components/PlatformToggle";
 import { cleanRateInput, formatRateDisplay } from "@/lib/formatRate";
-import { parseTabularPaste } from "@/lib/parseTabularPaste";
+import { parseTabularPaste, type PreferredRole } from "@/lib/parseTabularPaste";
 
 export interface URLRow {
   id: string;
@@ -61,7 +61,7 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
   function handleTabularPaste(
     e: React.ClipboardEvent<HTMLInputElement>,
     rowId: string,
-    preferredRole: "kol" | "url",
+    preferredRole: PreferredRole,
   ) {
     const text = e.clipboardData.getData("text");
     const hasSep = text.includes("\t") || text.includes(",") || /\r?\n/.test(text.trim());
@@ -69,16 +69,34 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
     e.preventDefault();
     const parsed = parseTabularPaste(text, includeRate, preferredRole);
     if (parsed.length === 0) return;
-    const existing = rows.filter(
-      (r) => r.id !== rowId && (r.url.trim() || r.kol.trim() || r.rate.trim()),
-    );
+    const idx = rows.findIndex((r) => r.id === rowId);
+    if (idx === -1) return;
+
+    // Single-row parse → merge into the current row rather than replacing
+    // it. This lets you paste a value into ONE cell (e.g., "1,234.56" into
+    // rate, or "@johndoe\thttps://…" into KOL) without wiping the other
+    // already-filled cells in the same row. Multi-row pastes still splice
+    // in at the current position for bulk import.
+    if (parsed.length === 1) {
+      const p = parsed[0];
+      const merged: URLRow = { ...rows[idx] };
+      if (p.url)  merged.url  = p.url;
+      if (p.kol)  merged.kol  = p.kol;
+      if (p.rate) merged.rate = p.rate;
+      onChange(rows.map((r, i) => (i === idx ? merged : r)));
+      return;
+    }
+
     const newRows: URLRow[] = parsed.map((p) => ({
       id: Math.random().toString(36).slice(2),
       url:  p.url,
       kol:  p.kol,
       rate: p.rate,
     }));
-    onChange([...existing, ...newRows]);
+    // Splice the parsed rows in AT the current row's position (replace it),
+    // keeping the surrounding order intact.
+    const spliced = [...rows.slice(0, idx), ...newRows, ...rows.slice(idx + 1)];
+    onChange(spliced);
   }
 
   function addRow() {
@@ -136,6 +154,7 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
                 inputMode="decimal"
                 value={formatRateDisplay(row.rate)}
                 onChange={(e) => onChange(update(rows, row.id, { rate: cleanRateInput(e.target.value) }))}
+                onPaste={(e) => handleTabularPaste(e, row.id, "rate")}
                 placeholder="0.00"
                 className={inputCls}
               />

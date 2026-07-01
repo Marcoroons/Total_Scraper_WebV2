@@ -24,6 +24,8 @@ const looksLikeRate = (s: string): boolean =>
 
 const cleanRate = (s: string): string => s.replace(/[$,\s]/g, "");
 
+export type PreferredRole = "kol" | "url" | "rate";
+
 /**
  * Parse a clipboard-text paste into an array of row objects.
  *
@@ -33,25 +35,28 @@ const cleanRate = (s: string): string => s.replace(/[$,\s]/g, "");
  *                      rate-looking value falls through to `kol` since the
  *                      caller has nowhere to put it.
  * @param preferredRole For single-value lines that DON'T look like a URL:
- *                      "kol" (default) means put the value in kol; "url"
- *                      means put in url. Lets URLDataTable's URL input
- *                      keep its historical "paste a list of URLs" behaviour
- *                      when the pasted lines are single strings.
+ *                      "kol" (default), "url", or "rate" biases the value
+ *                      to that slot. Lets each input keep intuitive
+ *                      single-column paste behaviour — paste 5 URLs into
+ *                      the URL box → 5 URL rows; paste 5 rates into the
+ *                      rate box → 5 rate rows; etc. Multi-cell lines always
+ *                      use content-based role detection instead.
  */
 export function parseTabularPaste(
   text: string,
   hasRate: boolean = false,
-  preferredRole: "kol" | "url" = "kol",
+  preferredRole: PreferredRole = "kol",
 ): ParsedTabularRow[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   return lines.map((line) => {
     // Tab wins over comma (Excel/Sheets uses tab; CSVs use comma). URLs can
-    // legitimately contain commas (query strings), so splitting on comma when
-    // tabs are present would be wrong.
+    // legitimately contain commas (query strings), and numeric rates use them
+    // as thousands separators ("1,234.56") — so splitting on comma when the
+    // whole line already looks like a single rate value would corrupt it.
     const parts =
-      line.includes("\t") ? line.split("\t") :
-      line.includes(",")  ? line.split(",")  :
+      line.includes("\t")                            ? line.split("\t") :
+      line.includes(",") && !looksLikeRate(line)     ? line.split(",")  :
       [line];
     const trimmed = parts.map((s) => s.trim()).filter(Boolean);
 
@@ -61,6 +66,11 @@ export function parseTabularPaste(
       const v = trimmed[0];
       if (looksLikeUrl(v)) return { url: v, kol: "", rate: "" };
       if (preferredRole === "url") return { url: v, kol: "", rate: "" };
+      if (preferredRole === "rate") {
+        // Clean formatting ($, commas) if the value looks like a rate;
+        // otherwise pass through — the user pasted into rate on purpose.
+        return { url: "", kol: "", rate: looksLikeRate(v) ? cleanRate(v) : v };
+      }
       return { url: "", kol: v, rate: "" };
     }
 

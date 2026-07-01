@@ -58,13 +58,28 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
     const hasSep = text.includes("\t") || text.includes(",") || /\r?\n/.test(text.trim());
     if (!hasSep) return;   // single cell — let default paste happen
     e.preventDefault();
-    const parsed = parseTabularPaste(text, /* hasRate */ false, preferredRole).map((p) => ({
+    const parsedRaw = parseTabularPaste(text, /* hasRate */ false, preferredRole);
+    if (parsedRaw.length === 0) return;
+    const idx = rows.findIndex((r) => r.id === rowId);
+    if (idx === -1) return;
+
+    // Single-row parse → merge into the current row so pasting into a
+    // partially-filled row doesn't wipe the other cell. Multi-row pastes
+    // splice in at the current position for bulk import.
+    if (parsedRaw.length === 1) {
+      const p = parsedRaw[0];
+      const merged: VideoRow = { ...rows[idx] };
+      if (p.url) merged.url = p.url;
+      if (p.kol) merged.kol = p.kol;
+      onChange(rows.map((r, i) => (i === idx ? merged : r)));
+      return;
+    }
+
+    const parsed: VideoRow[] = parsedRaw.map((p) => ({
       id: Math.random().toString(36).slice(2),
       url: p.url,
       kol: p.kol,
     }));
-    if (parsed.length === 0) return;
-    const idx = rows.findIndex((r) => r.id === rowId);
     const spliced = [...rows.slice(0, idx), ...parsed, ...rows.slice(idx + 1)];
     const filtered = spliced.filter((r) => r.url || r.kol);
     onChange(filtered.length ? filtered : [newVideoRow()]);
