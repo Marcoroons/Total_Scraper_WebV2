@@ -128,7 +128,7 @@ export default function CommentsPage() {
             <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
               Videos to scrape
               <span className="ml-1.5 normal-case tracking-normal font-normal text-muted-foreground">
-                paste lines as URL[tab]KOL or URL,KOL to fill both columns at once
+                paste lines as KOL[tab]URL or URL,KOL — order auto-detected, tab or comma separator
               </span>
             </p>
             <VideoURLTable rows={rows} onChange={setRows} platform={platform} />

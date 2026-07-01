@@ -80,14 +80,15 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
-      {/* Header */}
+      {/* Header — KOL on the left, URL on the right (swapped so the eye lands
+          on WHO the row is about before the long URL string). */}
       <div
         className={`grid text-[10px] font-mono uppercase tracking-wider text-muted-foreground bg-muted border-b border-border px-3 py-2 gap-2 ${
-          includeRate ? "grid-cols-[1fr_160px_96px_32px]" : "grid-cols-[1fr_160px_32px]"
+          includeRate ? "grid-cols-[160px_1fr_96px_32px]" : "grid-cols-[160px_1fr_32px]"
         }`}
       >
-        <span>Video URL *</span>
         <span>KOL Username</span>
+        <span>Video URL *</span>
         {includeRate && <span>Rate ($) *</span>}
         <span />
       </div>
@@ -98,22 +99,22 @@ export function URLDataTable({ rows, onChange, includeRate, platform = "Instagra
           <div
             key={row.id}
             className={`grid items-center gap-2 px-3 py-2 ${
-              includeRate ? "grid-cols-[1fr_160px_96px_32px]" : "grid-cols-[1fr_160px_32px]"
+              includeRate ? "grid-cols-[160px_1fr_96px_32px]" : "grid-cols-[160px_1fr_32px]"
             }`}
           >
+            <input
+              type="text"
+              value={row.kol}
+              onChange={(e) => onChange(update(rows, row.id, { kol: e.target.value }))}
+              placeholder={kolPlaceholder}
+              className={inputCls}
+            />
             <input
               type="url"
               value={row.url}
               onChange={(e) => onChange(update(rows, row.id, { url: e.target.value }))}
               onPaste={(e) => handleUrlPaste(e, row.id)}
               placeholder={urlPlaceholder}
-              className={inputCls}
-            />
-            <input
-              type="text"
-              value={row.kol}
-              onChange={(e) => onChange(update(rows, row.id, { kol: e.target.value }))}
-              placeholder={kolPlaceholder}
               className={inputCls}
             />
             {includeRate && (

@@ -59,19 +59,30 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
     if (lines.length <= 1 && !hasSep) return;
     e.preventDefault();
 
+    // Order-agnostic parsing: after the column swap, users might paste
+    // KOL-first (matching the new visual order) or URL-first (matching how
+    // they've been pasting for months). Detect which token looks like a URL
+    // and assign accordingly. Falls back to URL-first when both/neither look
+    // like URLs (preserves backward compat for ambiguous cases).
+    const looksLikeUrl = (s: string) =>
+      /^https?:\/\//i.test(s) ||
+      /(instagram|tiktok|youtube|youtu\.be)\.[a-z]/i.test(s);
+
     const parsed: VideoRow[] = lines.map((line) => {
-      let url = line, kol = "";
       const tabIdx = line.indexOf("\t");
-      if (tabIdx !== -1) {
-        url = line.slice(0, tabIdx).trim();
-        kol = line.slice(tabIdx + 1).trim();
-      } else {
-        const commaIdx = line.indexOf(",");
-        if (commaIdx !== -1) {
-          url = line.slice(0, commaIdx).trim();
-          kol = line.slice(commaIdx + 1).trim();
-        }
+      const commaIdx = line.indexOf(",");
+      const sepIdx = tabIdx !== -1 ? tabIdx : commaIdx;
+      if (sepIdx === -1) {
+        return { id: Math.random().toString(36).slice(2), url: line.trim(), kol: "" };
       }
+      const a = line.slice(0, sepIdx).trim();
+      const b = line.slice(sepIdx + 1).trim();
+      const aIsUrl = looksLikeUrl(a);
+      const bIsUrl = looksLikeUrl(b);
+      const [url, kol] =
+        aIsUrl && !bIsUrl ? [a, b] :
+        bIsUrl && !aIsUrl ? [b, a] :
+        [a, b];   // ambiguous → URL-first fallback
       return { id: Math.random().toString(36).slice(2), url, kol };
     });
 
@@ -83,18 +94,25 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-[1fr_180px_32px] gap-2 px-1">
-        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-          Video URL <span className="text-red-400">*</span>
-        </span>
+      <div className="grid grid-cols-[180px_1fr_32px] gap-2 px-1">
         <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
           KOL Username <span className="text-red-400">*</span>
+        </span>
+        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+          Video URL <span className="text-red-400">*</span>
         </span>
         <span />
       </div>
 
       {rows.map((row) => (
-        <div key={row.id} className="grid grid-cols-[1fr_180px_32px] gap-2 items-center">
+        <div key={row.id} className="grid grid-cols-[180px_1fr_32px] gap-2 items-center">
+          <input
+            type="text"
+            value={row.kol}
+            onChange={(e) => update(row.id, "kol", e.target.value)}
+            placeholder={kolPlaceholder}
+            className="px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+          />
           <input
             type="text"
             value={row.url}
@@ -102,13 +120,6 @@ export function VideoURLTable({ rows, onChange, platform = "Instagram" }: Props)
             onPaste={(e) => handlePaste(e, row.id)}
             placeholder={urlPlaceholder}
             className={inputCls}
-          />
-          <input
-            type="text"
-            value={row.kol}
-            onChange={(e) => update(row.id, "kol", e.target.value)}
-            placeholder={kolPlaceholder}
-            className="px-3 py-1.5 text-sm rounded-lg bg-input border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
           <button
             type="button"
