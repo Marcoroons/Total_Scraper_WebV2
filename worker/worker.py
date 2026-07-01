@@ -149,12 +149,87 @@ YT = {"video_stats":"streamers/youtube-scraper",
 # EMAIL DISPATCHER
 # ─────────────────────────────────────────────────────────────────────────────
 def dispatch_email(msg):
+    """Send an EmailMessage.
+
+    Dual-mode: prefers Resend's HTTP API when RESEND_API_KEY is set (works
+    on Railway, where outbound SMTP is BLOCKED — [Errno 101] Network is
+    unreachable — because they black-hole ports 25/465/587). Falls back to
+    Gmail SMTP for local dev / environments that allow SMTP egress.
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if resend_key:
+        _dispatch_via_resend(msg, resend_key)
+    else:
+        _dispatch_via_smtp(msg)
+
+
+def _dispatch_via_resend(msg, api_key):
+    """POST the email through https://api.resend.com/emails (port 443, so
+    Railway lets it through). Rebuilds the payload from the EmailMessage
+    caller already constructed for SMTP — no caller changes needed.
+
+    RESEND_FROM env var overrides the from-address for domain-verified
+    accounts; otherwise falls back to onboarding@resend.dev (Resend's dev
+    sandbox — works out of the box, only sends to your account email).
+    """
+    import base64, json
+    from_addr = (os.environ.get("RESEND_FROM", "").strip()
+                 or "Total Scraper <onboarding@resend.dev>")
+    to_raw = msg["To"] or ""
+    to_list = [t.strip() for t in str(to_raw).split(",") if t.strip()]
+    subject = msg["Subject"] or "Total Scraper report"
+
+    # Walk parts: capture the plain-text body + any file attachments.
+    text_body = ""
+    attachments = []
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain" and not part.get_filename():
+            try:
+                text_body = part.get_content() or text_body
+            except Exception:
+                pass
+        elif part.get_filename():
+            try:
+                payload = part.get_payload(decode=True) or b""
+                attachments.append({
+                    "filename": part.get_filename(),
+                    "content":  base64.b64encode(payload).decode("ascii"),
+                })
+            except Exception as e:
+                print(f"   ⚠️ Resend attachment {part.get_filename()} skipped: {e}")
+
+    body = {"from": from_addr, "to": to_list, "subject": subject,
+            "text": text_body or "See attached."}
+    if attachments:
+        body["attachments"] = attachments
+
+    print(f"   ✉️  Resend POST → {to_list} ({len(attachments)} attachment(s))")
+    r = requests.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {api_key}",
+                 "Content-Type":  "application/json"},
+        data=json.dumps(body),
+        timeout=30,
+    )
+    if not r.ok:
+        raise Exception(f"Resend API error {r.status_code}: {r.text[:400]}")
+    try:
+        rid = r.json().get("id", "?")
+    except Exception:
+        rid = "?"
+    print(f"   ✉️  Resend OK · id={rid}")
+
+
+def _dispatch_via_smtp(msg):
+    """SMTP fallback for local dev / non-Railway environments. Won't work
+    on Railway — set RESEND_API_KEY there to enable the HTTP path above."""
     bot = os.environ.get("BOT_EMAIL","").strip()
     pw  = os.environ.get("BOT_APP_PASSWORD","").strip()
     if not bot or not pw:
-        raise Exception("BOT_EMAIL/BOT_APP_PASSWORD missing on the worker service")
-    # Granular prints + explicit timeout so a hang can't lock the worker on
-    # SMTP forever (Gmail can take 30-60s to time out silently without one).
+        raise Exception(
+            "No email transport configured. Set RESEND_API_KEY (production, "
+            "Railway) OR BOT_EMAIL + BOT_APP_PASSWORD (local dev via Gmail SMTP)."
+        )
     print(f"   ✉️  SMTP connect smtp.gmail.com:465 …")
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as s:
         print(f"   ✉️  SMTP login as {bot} …")
