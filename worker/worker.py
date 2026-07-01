@@ -2557,14 +2557,18 @@ def process_scheduled_report(report):
             print(f"✅ Scheduled report {rid} sent (saved file, {len(file_bytes)} bytes).")
         except Exception as e:
             print(f"🚨 Scheduled report {rid} (saved-file mode): {e}")
-        # Always advance/deactivate — no busy-loop on failure.
+        # After processing: one-shots get HARD-DELETED (their reason to exist
+        # is gone — keeping a dead row just clutters the Active schedules
+        # panel and the DB). Recurring schedules advance to the next fire.
+        # We always run this branch so a failure can't busy-loop the worker.
         try:
             if freq == "once":
-                db.advance_scheduled_report(supabase, rid, deactivate=True)
+                supabase.table("scheduled_reports").delete().eq("id", rid).execute()
+                print(f"   🗑️ Deleted one-shot schedule {rid}")
             else:
                 db.advance_scheduled_report(supabase, rid, next_run_iso=_next_run_ict(freq, send_time))
         except Exception as e:
-            print(f"🚨 Scheduled report {rid} advance failed: {e}")
+            print(f"🚨 Scheduled report {rid} advance/delete failed: {e}")
         return
 
     try:
@@ -2647,14 +2651,18 @@ def process_scheduled_report(report):
     except Exception as e:
         print(f"🚨 Scheduled report {rid}: {e}")
 
-    # Always advance/deactivate so a failure can't busy-loop the worker.
+    # After processing: one-shots get HARD-DELETED (they exist only to fire
+    # once — no reason to leave dead rows in the DB or the Active schedules
+    # panel). Recurring schedules advance to their next fire time. We always
+    # run this branch so a failure can't busy-loop the worker.
     try:
         if freq == "once":
-            db.advance_scheduled_report(supabase, rid, deactivate=True)
+            supabase.table("scheduled_reports").delete().eq("id", rid).execute()
+            print(f"   🗑️ Deleted one-shot schedule {rid}")
         else:
             db.advance_scheduled_report(supabase, rid, next_run_iso=_next_run_ict(freq, send_time))
     except Exception as e:
-        print(f"🚨 Scheduled report {rid} advance failed: {e}")
+        print(f"🚨 Scheduled report {rid} advance/delete failed: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MULTI-LAYER DAILY COMPILER (Runs Once Per Day)
@@ -2771,6 +2779,22 @@ print(f"\n🚀 Worker online — polling every 3s | Competitor Intelligence: "
       f"{'ON' if ENABLE_INTELLIGENCE else 'OFF (set ENABLE_INTELLIGENCE=true to enable)'}")
 last_compiled = None
 last_gen_reports_sweep = 0.0   # Feature B: purge expired saved reports (hourly)
+
+# One-time startup cleanup: pre-2026-06-30 fired one-shots were deactivated
+# (active=false) rather than deleted. New code deletes on fire, so the only
+# way `active=false` rows now exist is legacy leftovers. Purge them here so
+# the transition is clean without needing a manual SQL sweep.
+try:
+    stale = (
+        supabase.table("scheduled_reports")
+        .delete()
+        .eq("active", False)
+        .execute().data or []
+    )
+    if stale:
+        print(f"🗑️ Startup: purged {len(stale)} legacy fired one-shot(s)")
+except Exception as e:
+    print(f"⚠️ Startup one-shot purge skipped: {e}")
 
 
 def sweep_expired_generated_reports():
