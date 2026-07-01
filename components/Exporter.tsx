@@ -256,24 +256,43 @@ export function Exporter({ activeProjectId }: { activeProjectId: string | null }
     () => Array.from(new Set(exportableSelected.map((j) => j.platform))),
     [exportableSelected]
   );
+  // Effective function key: prefer the SELECTION's job type (via the lock —
+  // once a job is selected, all visible jobs are the same type) over the
+  // dropdown filter. This closes a UX gap where `fnFilter="all" + selected
+  // URL Stats jobs` showed the profile-audit Excel builder even though the
+  // /export/video-stats endpoint silently ignores `layout` — user's tweaks
+  // in the advanced panel appeared to do nothing. Same for Comment jobs:
+  // the sentiment export accepts neither metrics nor layout, so the entire
+  // advanced panel should vanish when only Comment jobs are selected.
+  const effectiveFnKey: "all" | FunctionKey = useMemo(() => {
+    if (selectionLock) {
+      const scrape = SCRAPE_FUNCTIONS.find((f) => f.jobType === selectionLock.jobType);
+      if (scrape) return scrape.key;
+    }
+    return fnFilter;
+  }, [selectionLock, fnFilter]);
+
   // Calc metrics are scoped by BOTH platform (TikTok has no VTR) and the
-  // chosen scrape function (Comments have no post-engagement metrics at all).
-  // When fnFilter='all', use the union of relevant metrics so a mixed
-  // selection isn't artificially narrowed.
+  // effective scrape function. Once the selection locks to a function, the
+  // metric picker narrows to just that function's set — so a URL Stats
+  // selection doesn't show profile-only metrics like VTR / view-count-based
+  // ones, and a Comment selection shows nothing (comment exports don't
+  // accept metrics).
   const availableCalc = useMemo(() => {
     const platforms = selectedPlatforms.length ? selectedPlatforms : ["Instagram"];
     const platformSet = new Set<string>();
     for (const p of platforms) for (const m of (CALC_METRICS[p as "Instagram" | "TikTok" | "YouTube"] ?? [])) platformSet.add(m);
-    const fnSet: Set<string> = fnFilter === "all"
+    const fnSet: Set<string> = effectiveFnKey === "all"
       ? new Set(SCRAPE_FUNCTIONS.flatMap((f) => FUNCTION_CALC_METRICS[f.key]))
-      : new Set(FUNCTION_CALC_METRICS[fnFilter]);
+      : new Set(FUNCTION_CALC_METRICS[effectiveFnKey]);
     return Array.from(platformSet).filter((m) => fnSet.has(m));
-  }, [selectedPlatforms, fnFilter]);
+  }, [selectedPlatforms, effectiveFnKey]);
 
-  // Which UI blocks render depends on the active function filter.
-  const showsMetrics = fnFilter === "all" ? true : FUNCTION_SHOWS_METRICS[fnFilter];
-  const showsBuilder = fnFilter === "all" ? true : FUNCTION_SHOWS_BUILDER[fnFilter];
-  const showsProfileAuditOpts = fnFilter === "all" || fnFilter === "profile";
+  // Which UI blocks render depends on the EFFECTIVE function key (selection
+  // beats filter), not the dropdown alone.
+  const showsMetrics = effectiveFnKey === "all" ? true : FUNCTION_SHOWS_METRICS[effectiveFnKey];
+  const showsBuilder = effectiveFnKey === "all" ? true : FUNCTION_SHOWS_BUILDER[effectiveFnKey];
+  const showsProfileAuditOpts = effectiveFnKey === "all" || effectiveFnKey === "profile";
   const imagesOnly = layout.content_filter === "images";
 
   // Drop selected calc metrics that aren't available under the current filter
