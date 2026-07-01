@@ -201,6 +201,17 @@ def _fmt(val):
     return "Hidden" if val == -1 else val
 
 
+def _num(val):
+    """Coerce None / NaN to 0 for arithmetic. YouTube rows store shares=None
+    because the actor doesn't expose share counts — without this coercion,
+    `likes + comments + shares` blew up with `int + NoneType` TypeError."""
+    if val is None:
+        return 0
+    if isinstance(val, float) and pd.isna(val):
+        return 0
+    return val
+
+
 def _apply_header(ws):
     for cell in ws[1]:
         cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -226,11 +237,13 @@ def generate_video_stats_excel(df_raw: pd.DataFrame, is_tiktok: bool = False,
     # likes/comments/shares/play_count. VTR is intentionally dropped — there is no
     # separate view count (it was always "100%"); CPV needs a per-video rate the
     # video table doesn't carry.
+    # Use _num() around every numeric access so a None value (YouTube shares,
+    # or any missing field) coerces to 0 instead of raising TypeError.
     _CALC = {
-        "Engagement Rate":    lambda r: (r["likes"] + r["comments"] + r["shares"]) / max(r["play_count"], 1) * 100,
-        "Applause Rate":      lambda r: r["likes"] / max(r["play_count"], 1) * 100,
-        "Virality Rate":      lambda r: r["shares"] / max(r["play_count"], 1) * 100,
-        "Comment/View Ratio": lambda r: r["comments"] / max(r["play_count"], 1) * 100,
+        "Engagement Rate":    lambda r: (_num(r["likes"]) + _num(r["comments"]) + _num(r["shares"])) / max(_num(r["play_count"]), 1) * 100,
+        "Applause Rate":      lambda r: _num(r["likes"]) / max(_num(r["play_count"]), 1) * 100,
+        "Virality Rate":      lambda r: _num(r["shares"]) / max(_num(r["play_count"]), 1) * 100,
+        "Comment/View Ratio": lambda r: _num(r["comments"]) / max(_num(r["play_count"]), 1) * 100,
     }
     sel = [m for m in (calc_metrics or []) if m in _CALC]
     if not sel:
